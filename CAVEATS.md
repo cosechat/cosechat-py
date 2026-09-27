@@ -82,10 +82,10 @@ Known limits of cosiechat as it stands. The wire format is in
 
 ## Protocol gaps (vs Reticulum / LXMF)
 
-* Links have no keepalive or idle timeout: they last until `close_link()`,
-  a restart, or a new link to the same peer. No resources (large transfers),
-  stamps/proof-of-work, propagation-node sync, or named destinations
-  (app name + aspects).
+* No stamps/proof-of-work against spam, no syncing between propagation
+  nodes, and no named destinations (app name + aspects: use separate
+  identities, `roads/shared.py`). Links have no keepalive traffic on purpose:
+  idle links are forgotten after an hour, and dead ones are noticed on use.
 * **Loss recovery has limits.** Missing fragments are asked for and resent
   (SPEC §8.1), and whole messages are resent until a receipt (§9.1). But a
   packet whose fragments are *all* lost is only recovered by a whole resend,
@@ -93,13 +93,12 @@ Known limits of cosiechat as it stands. The wire format is in
   asks with a path request), and NACKs add a little airtime on busy channels.
 * **Receipts in multi-recipient messages can be forged by the other
   recipients**, since they all know the receipt secret.
-* Path expiry and path-quality selection are minimal: the first announce
-  copy wins, and a newer announce replaces the path.
-* Store and forward is passive: a propagation node only keeps what happens to
-  reach it for a destination it has no path to. There are no LXMF-style
-  propagation nodes that clients deposit with and fetch from yet. The default
-  store is in memory; `examples/storage.py` has a file-backed one.
-* One identity per node.
+* Path quality is only hop count: no link-quality or latency metrics.
+* A propagation node holds what is deposited with it (or reaches it for an
+  unreachable destination) and hands it out on fetch or when the recipient
+  announces. It learns who deposits and who fetches (they are its link
+  peers). The default store is in memory; `examples/storage.py` has a
+  file-backed one.
 * **Multi-recipient messages are an extra.** Reticulum/LXMF has none, and
   clients are expected to message one peer at a time. `Node.send([a, b])`
   just sends each recipient its own copy of one signed message, and the shared

@@ -1,5 +1,6 @@
 """Links: one PQ handshake, then tiny symmetric messages, with per-link forward secrecy."""
 
+import asyncio
 import random
 
 import pytest
@@ -285,5 +286,23 @@ def test_link_table_is_bounded():
     assert len(a.links) == 2 and a.link_to(peers[0].address) is None
     for n in (a, *peers):
       await n.stop()
+
+  run(main())
+
+
+def test_idle_links_are_forgotten_and_the_peer_recovers():
+  async def main():
+    hub = MemoryHub()
+    a, b = await pair(hub, retry_after=0.1, link_idle=0.3)
+    box = inbox(b)
+    await a.open_link(b.address)
+    await asyncio.sleep(0.4)
+    assert a.link_to(b.address) is None  # idle: keys gone
+    m = await a.send(b.address, 'after a quiet spell')  # sealed now
+    assert await a.delivered(m, timeout=5)
+    assert box[-1].link_id is None
+    await until(lambda: b.link_to(a.address) is None)  # b dropped its side on the sealed 1:1
+    await a.stop()
+    await b.stop()
 
   run(main())

@@ -78,6 +78,7 @@ NODE_NOTES = {
   'max_attempts': 'sends of a sealed message before giving up',
   'accept_links': 'answer link requests',
   'link_attempts': 'sends on a link before falling back to sealed',
+  'link_idle': 's a link may go unused before it (and its keys) are forgotten',
   'nack_attempts': 'NACKs per stalled fragment set',
   'max_links': 'links held (least recently used dropped)',
   'path_ttl': 's a path lives after the announce that set it',

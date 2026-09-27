@@ -601,7 +601,10 @@ link message id = SHA-256(link id || body)
   message instead. And a node that receives a sealed one-to-one message from
   a peer it holds a link with drops that link: the peer would have used it.
 * Nodes bound how many links they hold (reference: 256, least recently used
-  goes first).
+  goes first), and forget a link unused for a while (reference: an hour),
+  keys and all. There is no link keepalive traffic: a peer that still uses a
+  forgotten link gets no receipt, falls back to sealed messages, and that in
+  turn drops its side.
 
 ### 9.3 Resources (large transfers)
 
@@ -980,6 +983,7 @@ copy and the code differ).
 | max_attempts | 4 | sends of a sealed message before giving up |
 | accept_links | `True` | answer link requests |
 | link_attempts | 3 | sends on a link before falling back to sealed |
+| link_idle | 3600 | s a link may go unused before it (and its keys) are forgotten |
 | nack_attempts | 3 | NACKs per stalled fragment set |
 | max_links | 256 | links held (least recently used dropped) |
 | path_ttl | 604,800 | s a path lives after the announce that set it |

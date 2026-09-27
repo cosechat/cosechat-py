@@ -85,14 +85,16 @@ and will be ported from this repo. The docs are the porting guide:
 
 ## Status
 
-Working and tested (191 tests, no hardware): COSE Sign1/Sign/Mac0/Mac/Encrypt0/
-Encrypt; signing-only identities and suites; ratchets; sealed messages;
-full/short announces with keyset fetch; packets with a version, fragments and
-road auth; routing (announce flood with a 2% airtime budget, via-forwarding,
-path requests, week-long path expiry, store-and-forward); delivery receipts
-and resends; links (sessions); roads (memory, UDP, WebSocket, RNode/KISS);
-quantum-safe-only default; key pinning; vectors incl. must-reject cases;
-wolfCOSE interop (40/40); `cosiechat sizes`; examples.
+Working and tested (about 250 tests, no hardware): COSE Sign1/Sign/Mac0/Mac/
+Encrypt0/Encrypt; signing-only identities and suites; ratchets; sealed
+messages with receipts and resends; full/short announces with keyset fetch;
+packets with a version, fragments with resume, road auth; routing (announce
+budget, via-forwarding, path requests, expiry, fewer hops, dead-path
+recovery, ingress limits, bounded tables); links with dead-link fallback and
+idle timeout; resources; propagation nodes; contact cards; roads (memory,
+UDP, WebSocket, RNode/KISS, shared); quantum-safe-only default; key pinning;
+vectors (accept, reject, exact); CDDL; generated sizes/constants; live
+conformance runner; wolfCOSE interop (40/40); PORTING.md; examples.
 
 ## Left to do, in priority order
 
@@ -106,9 +108,9 @@ Legend: [ ] todo, [~] partly done
    links are capped (256, LRU). Also: a message from an unknown sender makes
    the node fetch the sender's keyset and retry (restart-proof). A "no such
    link" reply is impossible: link messages do not name their sender.
-2. [ ] **Link keepalive and idle timeout** (Reticulum links have both). Close
-   idle links on the local clock; detect a dead peer. Default timeouts are
-   local policy.
+2. [x] **Link idle timeout.** Done (`link_idle`, an hour): idle links and
+   their keys are forgotten; no keepalive traffic on purpose (dead links are
+   noticed on use and fall back to sealed messages).
 3. [x] **Fragment resume.** Done (SPEC §8.1): receivers NACK missing
    fragment indexes after a stall of ~2 frame-times; senders cache sent
    fragments for 60 s and resend only those. `test_resume.py` shows 10% frame

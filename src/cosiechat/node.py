@@ -244,6 +244,7 @@ class Node:
     max_attempts: int = 4,
     accept_links: bool = True,
     link_attempts: int = 3,
+    link_idle: float = 3600.0,
     nack_attempts: int = 3,
     store: Store | None = None,
     max_links: int = 256,
@@ -311,6 +312,10 @@ class Node:
     # a link message unanswered after link_attempts sends means the peer has
     # probably lost the link (restart): drop it and send the content sealed
     self.link_attempts = link_attempts
+    # a link unused this long is forgotten, keys and all (forward secrecy; no
+    # keepalive traffic: a peer still using it falls back to sealed messages)
+    self.link_idle = link_idle
+    self._link_used: dict[bytes, float] = {}  # link id -> last use (monotonic)
     # fragment resume: a receiver asks for missing fragments this many times
     self.nack_attempts = nack_attempts
     self._nack_timers: dict = {}  # (lane id, fragment id) -> [timer, tries, delay]
@@ -712,8 +717,15 @@ class Node:
   # --- links ---
 
   def link_to(self, address: bytes) -> L.LinkKeys | None:
+    self._expire_links()
     lid = self._link_to.get(address)
     return self.links.get(lid) if lid else None
+
+  def _expire_links(self):
+    cutoff = time.monotonic() - self.link_idle
+    for lid in [lid for lid in self.links if self._link_used.get(lid, 0.0) < cutoff]:
+      log.debug('%s: forgetting idle link %s', self, lid.hex()[:8])
+      self._drop_link(lid)
 
   async def open_link(self, to, timeout: float = 30.0) -> L.LinkKeys:
     """
@@ -748,6 +760,7 @@ class Node:
     self._drop_link(keys.link_id)
 
   def _drop_link(self, lid: bytes):
+    self._link_used.pop(lid, None)
     keys = self.links.pop(lid, None)
     if keys and self._link_to.get(keys.peer) == lid:
       del self._link_to[keys.peer]
@@ -758,12 +771,14 @@ class Node:
       self.links.pop(old, None)
     self.links[keys.link_id] = keys
     self._link_to[keys.peer] = keys.link_id
+    self._link_used[keys.link_id] = time.monotonic()
     while len(self.links) > self.max_links:
       self._drop_link(next(iter(self.links)))  # least recently used
 
   def _used_link(self, lid: bytes):
     if lid in self.links:
       self.links.move_to_end(lid)
+      self._link_used[lid] = time.monotonic()
 
   async def _send_on_link(self, addr, content, title, fields, receipt) -> msg.Message:
     keys = self.link_to(addr)
@@ -1455,6 +1470,7 @@ class Node:
       fut.set_result(keys)
 
   def _handle_link_data(self, p: Packet):
+    self._expire_links()
     keys = self.links.get(p.payload[: L.LINK_ID_SIZE])
     if keys is None:
       return
