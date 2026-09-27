@@ -97,3 +97,53 @@ def test_chat_example_starts():
     [sys.executable, EXAMPLES / 'chat.py', '--help'], capture_output=True, text=True, timeout=30
   )
   assert out.returncode == 0 and '--lock' in out.stdout
+
+
+def test_file_store_survives_a_propagation_node_restart(tmp_path):
+  from test_node import inbox, make, run, until
+
+  from cosiechat.node import Node
+  from cosiechat.roads.memory import MemoryHub
+
+  async def main():
+    hub = MemoryHub()
+    a, b = make(hub), make(hub)
+    box = inbox(b)
+    async with a:
+      async with b:
+        await a.announce()
+        await b.announce()
+        await until(lambda: a.peer_ratchet(b.address) and b.path(a.address))
+      # b is offline; a propagation node with files comes up, takes the message, restarts
+      prop = Node(propagate=True, rebroadcast_delay=0.01, store=storage.FileStore(tmp_path / 's'))
+      prop.add_road(hub.road())
+      async with prop:
+        await a.send(b.address, 'kept on disk', receipt=False)
+        await until(lambda: b.address in prop.store)
+      prop2 = Node(propagate=True, rebroadcast_delay=0.01, store=storage.FileStore(tmp_path / 's'))
+      prop2.add_road(hub.road())
+      async with prop2, b:
+        await b.announce()
+        await until(lambda: box)
+    assert box[0].content == 'kept on disk'
+    assert not any((tmp_path / 's').rglob('*-*'))  # handed over and deleted
+
+  run(main())
+
+
+def test_file_store_policy(tmp_path):
+  class Clock:
+    t = 1_000_000.0
+
+    def __call__(self):
+      return self.t
+
+  clock = Clock()
+  st = storage.FileStore(tmp_path, per_dest=2, keep_for=100, clock=clock)
+  dest = b'\x01' * 16
+  assert st.put(dest, 1, b'a') and st.put(dest, 1, b'b')
+  assert not st.put(dest, 1, b'c')  # full
+  clock.t += 101
+  st.maintain()
+  assert st.take(dest) == []
+  assert st.put(dest, 1, b'd') and st.take(dest) == [(1, b'd')]

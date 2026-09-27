@@ -43,7 +43,12 @@ async def main():
   ident = storage.load_identity(a.identity)
   ratchets = storage.ratchets_for(a.identity, ident)
   node = Node(
-    ident, ratchets=ratchets, transport=True, propagate=True, app_data={'name': 'gateway'}
+    ident,
+    ratchets=ratchets,
+    transport=True,
+    propagate=True,
+    store=storage.FileStore(a.identity.with_name(a.identity.name + '.store')),
+    app_data={'name': 'gateway'},
   )
   radio = RNodeRoad(a.port, a.freq, a.bw, a.txp, a.sf, a.cr)
   node.add_road(radio, RoadAuth.from_passphrase(a.road_key) if a.road_key else None)

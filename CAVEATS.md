@@ -92,8 +92,10 @@ Known limits of cosiechat as it stands. The wire format is in
   recipients**, since they all know the receipt secret.
 * Path expiry and path-quality selection are minimal: the first announce
   copy wins, and a newer announce replaces the path.
-* Store and forward is in memory only (64 messages per destination) and is
-  lost when a propagation node restarts. Persisting it is a storage concern.
+* Store and forward is passive: a propagation node only keeps what happens to
+  reach it for a destination it has no path to. There are no LXMF-style
+  propagation nodes that clients deposit with and fetch from yet. The default
+  store is in memory; `examples/storage.py` has a file-backed one.
 * One identity per node.
 * **Multi-recipient messages are an extra.** Reticulum/LXMF has none, and
   clients are expected to message one peer at a time. `Node.send([a, b])`

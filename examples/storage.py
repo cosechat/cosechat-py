@@ -1,6 +1,6 @@
 """
 Suggested storage for a cosiechat application: key files, encryption at
-rest, and a ratchet rotation/retention policy.
+rest, a ratchet rotation/retention policy, and a store-and-forward store.
 
 The library deliberately does none of this. Where keys live, how they are
 protected, and how long they are kept depends on the device and the threat
@@ -170,3 +170,56 @@ async def announce_forever(node, interval: float, ratchets: FileRatchets | None 
       ratchets.maintain()
     await node.announce()
     await asyncio.sleep(interval)
+
+
+class FileStore:
+  """
+  Store-and-forward held in files, for propagation nodes (see cosiechat.store).
+  One directory per destination, one file per held packet; only ciphertext
+  is ever written. Policy: at most `per_dest` held per destination, and
+  anything older than `keep_for` (by this device's clock) is deleted by
+  maintain().
+  """
+
+  def __init__(self, path: Path, per_dest: int = 256, keep_for: float = 7 * 86400, clock=time.time):
+    self.path = Path(path)
+    self.per_dest = per_dest
+    self.keep_for = keep_for
+    self.clock = clock
+    self.path.mkdir(parents=True, exist_ok=True)
+
+  def _dir(self, dest: bytes) -> Path:
+    return self.path / dest.hex()
+
+  def __contains__(self, dest: bytes) -> bool:
+    d = self._dir(dest)
+    return d.exists() and any(d.iterdir())
+
+  def put(self, dest: bytes, kind: int, payload: bytes) -> bool:
+    d = self._dir(dest)
+    d.mkdir(exist_ok=True)
+    if len(list(d.iterdir())) >= self.per_dest:
+      return False
+    name = f'{int(self.clock() * 1000):015d}-{os.urandom(4).hex()}'
+    write_private(d / name, cbor.dumps([kind, payload]))
+    return True
+
+  def take(self, dest: bytes) -> list[tuple[int, bytes]]:
+    d = self._dir(dest)
+    if not d.exists():
+      return []
+    out = []
+    for f in sorted(d.iterdir()):
+      if f.name.endswith('.tmp'):
+        continue
+      kind, payload = cbor.loads(f.read_bytes())
+      out.append((kind, payload))
+      f.unlink()
+    return out
+
+  def maintain(self):
+    cutoff = (self.clock() - self.keep_for) * 1000
+    for d in self.path.iterdir():
+      for f in d.iterdir():
+        if int(f.name.split('-')[0]) < cutoff:
+          f.unlink()

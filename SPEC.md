@@ -427,7 +427,8 @@ too) and a path table `dest → (road, via, hops, announce sequence, expiry)`.
 * **DATA received**, not for us, at a transport node: forward if `via` is our
   address: `hops + 1`, `via = our path.via`, send on our path's road.
   A propagation node also takes `via = null` DATA; with no path it holds the
-  sealed payload and forwards it when the destination announces.
+  sealed payload and forwards it when the destination announces. Where it
+  holds it, how much, and for how long is local storage policy.
 * **RECEIPT and LINK_*** packets are routed exactly like DATA (including by
   propagation nodes).
 * **PATH_REQUEST for dest:** the destination sends a full announce. A transport node with

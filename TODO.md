@@ -111,9 +111,9 @@ Legend: [ ] todo, [~] partly done
    (`test_lossy_lora_road_still_delivers_once` has to use 5%). Let the
    receiver ask for the missing fragments (a NACK listing indexes for a
    fragment id), or add FEC. Signed announces and link handshakes need it most.
-4. [ ] **Pluggable store-and-forward.** `Node.pending` is in memory only, so a
-   propagation node forgets everything on restart. Take a provider (like
-   `ratchets=`) so storage stays the application's; add an example.
+4. [x] **Pluggable store-and-forward.** Done: `Node(store=...)` with
+   `put`/`take` (`store.py`, `MemoryStore` default); `examples/storage.py`
+   `FileStore` survives restarts (used by `lora_gateway.py`).
 5. [~] **Path upkeep.** Done: week-long expiry (`Node.path()`, `path_ttl`).
    Left: drop a path after repeated delivery failures, prefer fewer hops
    among announces of the same sequence, recover when a transport vanishes.

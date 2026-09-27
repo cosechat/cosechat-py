@@ -5,8 +5,11 @@ from .keys import CoseError, Key
 from .message import Announce, Message
 from .node import Node, Path
 from .packet import RoadAuth
+from .store import MemoryStore, Store
 
 __all__ = [
+  'MemoryStore',
+  'Store',
   'SUITES',
   'Announce',
   'CoseError',

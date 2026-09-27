@@ -163,7 +163,7 @@ def test_propagation_node_stores_and_forwards():
       # b is offline now; the propagation node arrives and never saw b
       async with prop:
         await a.send(b.address, 'while you were away')
-        await until(lambda: b.address in prop.pending)
+        await until(lambda: b.address in prop.store)
         async with b:
           await b.announce()
           await until(lambda: box)

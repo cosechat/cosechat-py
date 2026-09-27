@@ -57,6 +57,7 @@ from .packet import (
 )
 from .ratchet import MemoryRatchets, Ratchets
 from .roads import Road
+from .store import MemoryStore, Store
 
 log = logging.getLogger('cosiechat.node')
 
@@ -170,6 +171,7 @@ class Node:
     max_attempts: int = 4,
     accept_links: bool = True,
     link_attempts: int = 3,
+    store: Store | None = None,
     max_links: int = 256,
     path_ttl: float = 7 * 86400,
     announce_cap: float = 0.02,
@@ -243,8 +245,9 @@ class Node:
     self.identities: dict[bytes, Identity] = {self.address: self.identity.public()}
     self.announces: dict[bytes, tuple[bytes, msg.Announce]] = {}
     self.paths: dict[bytes, Path] = {}
-    self.pending: dict[bytes, list[bytes]] = {}
-    self.max_pending = 64
+    # propagation nodes keep ciphertext for unreachable destinations here;
+    # where and how long is the application's storage policy (store.py)
+    self.store = store if store is not None else MemoryStore()
 
     self._seen: OrderedDict[bytes, None] = OrderedDict()
     self._reassembler = Reassembler()
@@ -720,7 +723,7 @@ class Node:
     for fut in self._waiters.pop(p.dest, []):
       if not fut.done():
         fut.set_result(self.identities.get(p.dest))
-    for kind, payload in self.pending.pop(p.dest, []):
+    for kind, payload in self.store.take(p.dest):
       self._spawn(path.lane.send(Packet(kind, 0, p.dest, path.via, payload)))
     return path
 
@@ -814,9 +817,7 @@ class Node:
     path = self.path(p.dest)
     if path is None:
       if self.propagate:
-        q = self.pending.setdefault(p.dest, [])
-        if len(q) < self.max_pending:
-          q.append((p.type, p.payload))
+        if self.store.put(p.dest, p.type, p.payload):
           log.debug('%s: holding %r for later', self, p)
       return
     if p.hops + 1 >= self.max_hops:
