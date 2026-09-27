@@ -1,0 +1,99 @@
+"""The examples keep working: mesh_sim in-process, echo bot + client as real processes over UDP."""
+
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+from cosiechat import Identity
+from cosiechat.keys import HPKE_9
+
+EXAMPLES = Path(__file__).resolve().parents[1] / 'examples'
+sys.path.insert(0, str(EXAMPLES))
+import storage  # noqa: E402
+
+
+def test_mesh_sim():
+  out = subprocess.run(
+    [sys.executable, EXAMPLES / 'mesh_sim.py'], capture_output=True, text=True, timeout=60
+  )
+  assert out.returncode == 0, out.stderr
+  assert "bob got 'hello across three roads'" in out.stdout
+  assert 'read a message' not in out.stdout
+  assert 'bob knows mallory: False' in out.stdout
+
+
+def test_udp_echo_bot_roundtrip(tmp_path):
+  ident = tmp_path / 'bot'
+  bot_addr = storage.load_identity(ident).address.hex()
+  bot = subprocess.Popen(
+    [sys.executable, EXAMPLES / 'echo_bot.py', '--identity', ident, '--interval', '2',
+     '--listen', '127.0.0.1:47201', '--peer', '127.0.0.1:47202'],
+    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+  )  # fmt: skip
+  try:
+    time.sleep(1.5)
+    client = subprocess.run(
+      [sys.executable, EXAMPLES / 'echo_client.py', bot_addr, '--count', '2',
+       '--listen', '127.0.0.1:47202', '--peer', '127.0.0.1:47201'],
+      capture_output=True, text=True, timeout=60, cwd=EXAMPLES,
+    )  # fmt: skip
+  finally:
+    bot.terminate()
+    log = bot.communicate(timeout=10)[0]
+  assert client.returncode == 0, client.stdout + client.stderr + log
+  assert 'all echoes ok' in client.stdout
+  assert 'ping 0' in log
+
+
+# --- examples/storage.py: the suggested storage policy ---
+
+
+class Clock:
+  t = 1_000_000.0
+
+  def __call__(self):
+    return self.t
+
+
+def test_storage_ratchet_policy_uses_local_clock(tmp_path):
+  clock = Clock()
+  path = tmp_path / 'r'
+  rs = storage.FileRatchets(HPKE_9, path, rotate_every=60, keep_for=300, clock=clock)
+  assert rs.maintain()  # first ratchet
+  first = rs.current()
+  clock.t += 59
+  assert not rs.maintain() and rs.current() is first
+  clock.t += 2
+  assert rs.maintain() and rs.current() is not first
+  assert stat.S_IMODE(path.stat().st_mode) == 0o600
+  again = storage.FileRatchets(HPKE_9, path, clock=clock)
+  assert again.get(first.kid).priv == first.priv
+  clock.t += 300
+  rs.maintain()
+  assert rs.get(first.kid) is None
+  assert storage.FileRatchets(HPKE_9, path, clock=clock).get(first.kid) is None
+
+
+def test_storage_encrypts_keys_at_rest(tmp_path):
+  path = tmp_path / 'id'
+  ident = storage.load_identity(path, passphrase='hunter2')
+  raw = path.read_bytes()
+  assert ident.to_bytes() not in raw and ident.public_bytes not in raw
+  assert storage.load_identity(path, passphrase='hunter2') == ident
+  with pytest.raises(PermissionError):
+    storage.load_identity(path)
+  with pytest.raises(PermissionError):
+    storage.load_identity(path, passphrase='wrong')
+  plain = storage.load_identity(tmp_path / 'plain')
+  assert Identity.from_bytes((tmp_path / 'plain').read_bytes()) == plain
+
+
+def test_chat_example_starts():
+  out = subprocess.run(
+    [sys.executable, EXAMPLES / 'chat.py', '--help'], capture_output=True, text=True, timeout=30
+  )
+  assert out.returncode == 0 and '--no-forward-secrecy' in out.stdout

@@ -1,0 +1,39 @@
+[project]
+name = 'cosiechat'
+version = '0.1.0'
+description = 'Post-quantum mesh messaging over COSE/CBOR, inspired by Reticulum/LXMF'
+readme = 'README.md'
+requires-python = '>=3.11'
+license = 'MIT'
+dependencies = ['cryptography>=50', 'cbor2>=5.6']
+
+[project.optional-dependencies]
+websocket = ['websockets>=13']
+rnode = ['pyserial>=3.5']
+all = ['websockets>=13', 'pyserial>=3.5']
+
+[project.scripts]
+cosiechat = 'cosiechat.cli:main'
+
+[dependency-groups]
+dev = ['pytest>=8', 'ruff>=0.6', 'pycose>=1.1', 'cwt>=3', 'websockets>=13', 'pyserial>=3.5']
+
+[build-system]
+requires = ['hatchling']
+build-backend = 'hatchling.build'
+
+[tool.pytest.ini_options]
+testpaths = ['tests']
+
+# StandardJS-flavored Python: 2-space indent, single quotes
+[tool.ruff]
+indent-width = 2
+line-length = 100
+
+[tool.ruff.format]
+quote-style = 'single'
+
+[tool.ruff.lint]
+select = ['E', 'F', 'I', 'UP', 'B']
+# long crypto one-liners read better unwrapped; formatter handles the rest
+ignore = ['E501']
