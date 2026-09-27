@@ -39,6 +39,7 @@ from .keys import QUANTUM_SAFE_KEM, Key
 from .packet import (
   ANNOUNCE,
   DATA,
+  FRAGMENT_ID_SIZE,
   FRAGMENT_OVERHEAD,
   KEYSET,
   KEYSET_REQUEST,
@@ -48,12 +49,14 @@ from .packet import (
   PATH_REQUEST,
   RECEIPT,
   ROUTED,
+  Nack,
   Packet,
   PacketError,
   Reassembler,
   RoadAuth,
   decode,
   fragment,
+  nack,
 )
 from .ratchet import MemoryRatchets, Ratchets
 from .roads import Road
@@ -101,6 +104,9 @@ class _Lane:
     self.auth = auth
     self.cap = cap
     self.max_age = max_age
+    # fragments we sent, kept briefly so a receiver can ask for missing ones
+    self._sent: OrderedDict[bytes, tuple[list[bytes], float]] = OrderedDict()
+    self.fragment_cache_time = 60.0
     self.queue: dict[bytes, tuple[int, float, Packet]] = {}  # dest -> (hops, queued at, packet)
     self._ready_at = 0.0
     self._wake = asyncio.Event()
@@ -119,13 +125,34 @@ class _Lane:
     if len(frame) <= self.max_frame:
       frames = [frame]
     else:
-      frames = fragment(frame, self.max_frame - FRAGMENT_OVERHEAD)
+      fid = os.urandom(FRAGMENT_ID_SIZE)
+      frames = fragment(frame, self.max_frame - FRAGMENT_OVERHEAD, fid)
+      self._sent[fid] = (frames, time.monotonic() + self.fragment_cache_time)
+      while len(self._sent) > 32:
+        self._sent.popitem(last=False)
     total = 0
     for f in frames:
-      wire = self.auth.wrap(f) if self.auth else f
-      total += len(wire)
-      await self.road.send(wire)
+      total += await self.send_frame(f)
     return total
+
+  async def send_frame(self, frame: bytes) -> int:
+    wire = self.auth.wrap(frame) if self.auth else frame
+    await self.road.send(wire)
+    return len(wire)
+
+  @property
+  def frame_time(self) -> float:
+    """Seconds to put one full frame on this road (0 if it is fast)."""
+    return self.road.mtu * 8 / self.road.bitrate if self.road.bitrate else 0.0
+
+  async def resend(self, n: Nack):
+    entry = self._sent.get(n.fid)
+    if entry is None or time.monotonic() > entry[1]:
+      return
+    frames = entry[0]
+    for i in dict.fromkeys(n.missing):  # in order, no repeats
+      if i < len(frames):
+        await self.send_frame(frames[i])
 
   async def announce(self, packet: Packet):
     if not self.budgeted:
@@ -171,6 +198,7 @@ class Node:
     max_attempts: int = 4,
     accept_links: bool = True,
     link_attempts: int = 3,
+    nack_attempts: int = 3,
     store: Store | None = None,
     max_links: int = 256,
     path_ttl: float = 7 * 86400,
@@ -231,6 +259,9 @@ class Node:
     # a link message unanswered after link_attempts sends means the peer has
     # probably lost the link (restart): drop it and send the content sealed
     self.link_attempts = link_attempts
+    # fragment resume: a receiver asks for missing fragments this many times
+    self.nack_attempts = nack_attempts
+    self._nack_timers: dict = {}  # (lane id, fragment id) -> [timer, tries, delay]
     self.max_links = max_links
     # a path is forgotten this long after the announce that made it (local
     # monotonic clock; Reticulum uses a week). Any valid announce refreshes it.
@@ -643,12 +674,16 @@ class Node:
       if lane.auth:
         frame = lane.auth.unwrap(frame)
       item = decode(frame)
+      if isinstance(item, Nack):
+        self._spawn(lane.resend(item))
+        return
       if isinstance(item, tuple):
         whole = self._reassembler.add(id(lane), item)
+        self._watch_fragments(lane, item[0], whole is not None)
         if whole is None:
           return
         item = decode(whole)
-        if isinstance(item, tuple):
+        if not isinstance(item, Packet):
           raise PacketError('nested fragment')
     except PacketError as e:
       log.debug('%s: dropped frame on %s: %s', self, lane.road, e)
@@ -688,6 +723,35 @@ class Node:
       return True
     except Exception:
       return False
+
+  def _nack_delay(self, lane: _Lane) -> float:
+    # a gap of about two frame-times means fragments went missing
+    return 2 * lane.frame_time + 0.2
+
+  def _watch_fragments(self, lane: _Lane, fid: bytes, complete: bool):
+    """(Re)start the stall timer of an incomplete fragment set; stop it when complete."""
+    key = (id(lane), fid)
+    entry = self._nack_timers.pop(key, None)
+    if entry:
+      entry[0].cancel()
+    if complete:
+      return
+    tries = entry[1] if entry else 0
+    delay = self._nack_delay(lane)
+    timer = asyncio.get_running_loop().call_later(delay, self._stalled, lane, fid)
+    self._nack_timers[key] = [timer, tries, delay]
+
+  def _stalled(self, lane: _Lane, fid: bytes):
+    key = (id(lane), fid)
+    entry = self._nack_timers.pop(key, None)
+    missing = self._reassembler.missing(id(lane), fid)
+    if entry is None or not missing or entry[1] >= self.nack_attempts:
+      return
+    log.debug('%s: asking for %d missing fragment(s) on %s', self, len(missing), lane.road)
+    self._spawn(lane.send_frame(nack(fid, missing)))
+    delay = entry[2] * 2 + lane.frame_time * len(missing)
+    timer = asyncio.get_running_loop().call_later(delay, self._stalled, lane, fid)
+    self._nack_timers[key] = [timer, entry[1] + 1, delay]
 
   def _handle_announce(self, lane: _Lane, p: Packet):
     if p.dest == self.address or not self._precheck_announce(p):

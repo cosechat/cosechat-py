@@ -106,11 +106,10 @@ Legend: [ ] todo, [~] partly done
 2. [ ] **Link keepalive and idle timeout** (Reticulum links have both). Close
    idle links on the local clock; detect a dead peer. Default timeouts are
    local policy.
-3. [ ] **Fragment-level resume for LoRa.** Resends are whole-message; a PQ
-   message is 10 LoRa frames, so at 10% frame loss most attempts fail
-   (`test_lossy_lora_road_still_delivers_once` has to use 5%). Let the
-   receiver ask for the missing fragments (a NACK listing indexes for a
-   fragment id), or add FEC. Signed announces and link handshakes need it most.
+3. [x] **Fragment resume.** Done (SPEC §8.1): receivers NACK missing
+   fragment indexes after a stall of ~2 frame-times; senders cache sent
+   fragments for 60 s and resend only those. `test_resume.py` shows 10% frame
+   loss recovered in time, and the same road losing messages without it.
 4. [x] **Pluggable store-and-forward.** Done: `Node(store=...)` with
    `put`/`take` (`store.py`, `MemoryStore` default); `examples/storage.py`
    `FileStore` survives restarts (used by `lora_gateway.py`).

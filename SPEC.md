@@ -360,6 +360,7 @@ keysets they asked for.
 packet = [ version, type, hops, dest, via, payload ]
   version uint, 0 for this draft
   type    0 ANNOUNCE | 1 DATA | 2 PATH_REQUEST | 4 RECEIPT
+          (3 is a fragment and 10 a fragment NACK, §8.1: frames, not packets)
           | 5 LINK_REQUEST | 6 LINK_ACCEPT | 7 LINK_DATA
           | 8 KEYSET_REQUEST | 9 KEYSET
   hops    uint, hops travelled so far (originator sends 0)
@@ -388,9 +389,28 @@ fragment = [ version, 3, id (bstr .size 8, random), index, count, chunk (bstr) ]
 ```
 
 Receivers reassemble per road and fragment id, in any order, and drop
-incomplete sets after a timeout (reference: 60 s). There is no
-retransmission; a lost fragment loses the packet. Senders size chunks as
+incomplete sets after a timeout (reference: 60 s). Senders size chunks as
 `mtu - road auth overhead - 21`.
+
+**Resume.** A lost fragment should not cost the whole packet on a slow road:
+
+```
+nack = [ version, 10, id (the fragment id), [missing index, ...] ]
+```
+
+* A sender keeps the fragments of what it sent for a while (reference: the
+  last 32 sets, for 60 s).
+* A receiver whose incomplete set gets no new fragment for about two
+  frame-times (`2 * mtu * 8 / bitrate + 0.2 s`; 0.2 s on fast roads) sends a
+  NACK on that road listing the missing indexes, and asks again with growing
+  gaps, a bounded number of times (reference: 3).
+* A sender that holds that fragment id resends exactly the listed fragments,
+  once each; anyone else ignores the NACK. Fragmenting is per hop, so NACKs
+  never leave the road.
+* A receiver ignores fragments of a set it already completed.
+
+If every fragment is lost the receiver knows nothing; whole-message resends
+(§9.1) cover that.
 
 ### 8.2 Road auth
 

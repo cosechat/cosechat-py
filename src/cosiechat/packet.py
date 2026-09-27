@@ -17,6 +17,11 @@ Packets: what travels on a road.
     Roads with a small MTU (LoRa) carry big packets (PQ keys and signatures
     are kilobytes) as fragments. Fragments of one packet share an 8-byte id.
 
+  nack     = [version, 10, id, [missing indexes]]
+    A receiver whose fragment set stalls asks the sender (on the same road)
+    for just the missing fragments. Fragmenting is per hop, so this never
+    leaves the road.
+
   road frame = packet | fragment, optionally wrapped in COSE_Mac0 or
                COSE_Encrypt0 under a road key (see RoadAuth).
 
@@ -27,6 +32,7 @@ SHA-256(CBOR [version, type, dest, payload]).
 import hashlib
 import os
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 
 from . import cbor, cose
@@ -39,6 +45,7 @@ ANNOUNCE = 0
 DATA = 1
 PATH_REQUEST = 2
 FRAGMENT = 3
+FRAGMENT_NACK = 10
 RECEIPT = 4
 LINK_REQUEST = 5
 LINK_ACCEPT = 6
@@ -63,6 +70,12 @@ ROUTED = {DATA, RECEIPT, LINK_REQUEST, LINK_ACCEPT, LINK_DATA}
 FRAGMENT_ID_SIZE = 8
 # array(1) + version(1) + type(1) + id(1+8) + index(3) + count(3) + chunk header(3)
 FRAGMENT_OVERHEAD = 21
+
+
+@dataclass
+class Nack:
+  fid: bytes
+  missing: list[int]
 
 
 class PacketError(Exception):
@@ -97,7 +110,7 @@ def _check_addr(a, nullable=False):
 
 
 def decode(frame: bytes):
-  """Returns a Packet, or a Fragment tuple (id, index, count, chunk)."""
+  """Returns a Packet, a fragment tuple (id, index, count, chunk), or a Nack."""
   try:
     arr = cbor.loads(frame)
   except Exception as e:
@@ -114,6 +127,12 @@ def decode(frame: bytes):
     if not (isinstance(fid, bytes) and isinstance(chunk, bytes) and 0 <= index < count):
       raise PacketError('bad fragment')
     return (fid, index, count, chunk)
+  if arr[0] == FRAGMENT_NACK:
+    if len(arr) != 3 or not isinstance(arr[1], bytes) or not isinstance(arr[2], list):
+      raise PacketError('bad nack')
+    if len(arr[2]) > 4096 or not all(isinstance(i, int) and i >= 0 for i in arr[2]):
+      raise PacketError('bad nack')
+    return Nack(arr[1], arr[2])
   if arr[0] not in TYPES or len(arr) != 5:
     raise PacketError('unknown packet type')
   t, hops, dest, via, payload = arr
@@ -124,10 +143,14 @@ def decode(frame: bytes):
   return Packet(t, hops, dest, via, payload)
 
 
-def fragment(frame: bytes, chunk_size: int) -> list[bytes]:
+def nack(fid: bytes, missing: list[int]) -> bytes:
+  return cbor.dumps([VERSION, FRAGMENT_NACK, fid, missing])
+
+
+def fragment(frame: bytes, chunk_size: int, fid: bytes | None = None) -> list[bytes]:
   if chunk_size <= 0:
     raise PacketError('road MTU too small to fragment into')
-  fid = os.urandom(FRAGMENT_ID_SIZE)
+  fid = fid or os.urandom(FRAGMENT_ID_SIZE)
   chunks = [frame[i : i + chunk_size] for i in range(0, len(frame), chunk_size)]
   return [cbor.dumps([VERSION, FRAGMENT, fid, i, len(chunks), c]) for i, c in enumerate(chunks)]
 
@@ -140,12 +163,22 @@ class Reassembler:
     self.max_sets = max_sets
     self.max_size = max_size
     self._sets: dict = {}
+    self._done: OrderedDict = OrderedDict()  # recently completed, to ignore late resends
+
+  def missing(self, source, fid) -> list[int] | None:
+    """Indexes still missing from an incomplete set, or None if there is no such set."""
+    entry = self._sets.get((source, fid))
+    if entry is None:
+      return None
+    return [i for i in range(entry['count']) if i not in entry['chunks']]
 
   def add(self, source, frag) -> bytes | None:
     fid, index, count, chunk = frag
     now = time.monotonic()
     self._expire(now)
     key = (source, fid)
+    if key in self._done:
+      return None
     entry = self._sets.get(key)
     if entry is None:
       if len(self._sets) >= self.max_sets:
@@ -162,6 +195,9 @@ class Reassembler:
       return None
     if len(entry['chunks']) == count:
       self._sets.pop(key)
+      self._done[key] = None
+      if len(self._done) > 1024:
+        self._done.popitem(last=False)
       return b''.join(entry['chunks'][i] for i in range(count))
     return None
 

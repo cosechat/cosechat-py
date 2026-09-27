@@ -82,12 +82,11 @@ Known limits of cosiechat as it stands. The wire format is in
   a restart, or a new link to the same peer. No resources (large transfers),
   stamps/proof-of-work, propagation-node sync, or named destinations
   (app name + aspects).
-* **Retransmission is whole-message.** Receipts and resends (SPEC §9.1) make
-  delivery reliable, but losing any one fragment still loses that attempt. A
-  PQ message is about 10 LoRa frames, so at 5% frame loss only ~60% of
-  attempts get through, and at 10% about a third. Fragment-level resume
-  (resend only the missing frames) is on the TODO. Announces are not
-  retransmitted at all.
+* **Loss recovery has limits.** Missing fragments are asked for and resent
+  (SPEC §8.1), and whole messages are resent until a receipt (§9.1). But a
+  packet whose fragments are *all* lost is only recovered by a whole resend,
+  announces are never resent (a node that missed one waits for the next, or
+  asks with a path request), and NACKs add a little airtime on busy channels.
 * **Receipts in multi-recipient messages can be forged by the other
   recipients**, since they all know the receipt secret.
 * Path expiry and path-quality selection are minimal: the first announce

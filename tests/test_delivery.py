@@ -52,8 +52,8 @@ def test_lossy_lora_road_still_delivers_once():
     hub = MemoryHub()
     a, b = await pair(hub, mtu=255, retry_after=0.1, retry_max=0.4, max_attempts=15)
     box = inbox(b)
-    # 5% of LoRa frames lost; a PQ message is ~20 frames here, so a whole
-    # message gets through only ~1 time in 3 (fragment resume is on the TODO)
+    # 5% of LoRa frames lost; a PQ message is ~20 frames here. Fragment resume
+    # and whole-message resends both help (test_resume.py isolates resume)
     hub.loss = 0.05
     m = await a.send(b.address, 'x' * 100)
     assert await a.delivered(m, timeout=30)
