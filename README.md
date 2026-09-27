@@ -113,6 +113,7 @@ got = message.unseal(bob, sealed, {alice.address: alice.public()}.get, ratchets=
 ```sh
 uv run cosiechat vectors -o vectors.json   # what other implementations must accept
 uv run cosiechat check their-vectors.json  # check what they produce
+uv run interop/live.py <bot address> --udp HOST:PORT --udp-peer HOST:PORT   # live checks vs an echo bot
 cd interop/wolfcose && make test WOLFSSL_PREFIX=... WOLFCOSE_DIR=...
 ```
 

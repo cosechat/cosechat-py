@@ -727,6 +727,12 @@ Another implementation should (1) accept every vector in that file, refusing
 every `reject` case and reproducing every `exact` case, and (2) emit a file in
 the same format that `cosiechat check FILE` accepts.
 
+`interop/live.py` is the behavioural check: it drives an echo bot written in
+any implementation over UDP or WebSocket through path requests, sealed
+messages and receipts, ratchet rotation, links, resources and first contact
+with an unknown sender (the bot must fetch the keyset). `examples/echo_bot.py`
+is the reference bot and passes all six checks.
+
 `interop/wolfcose` runs the vectors through stock wolfCOSE + wolfSSL (the
 Arduino stack): `make test WOLFSSL_PREFIX=… WOLFCOSE_DIR=…`. Today it accepts
 all 40 cases in its scope. That covers Ed25519, ESP256 and ML-DSA-44/65/87

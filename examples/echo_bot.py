@@ -53,6 +53,11 @@ async def main():
     except (LookupError, PermissionError) as e:
       print(f'  could not reply: {e}', flush=True)
 
+  @node.on_resource
+  async def echo_resource(r):
+    print(f'{r.peer.hex()[:12]}: resource of {len(r.data)} bytes', flush=True)
+    await node.send_resource(r.peer, r.data, r.meta)
+
   @node.on_announce
   def seen(ann, path):
     name = ann.app_data.get('name') if isinstance(ann.app_data, dict) else None

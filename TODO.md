@@ -148,10 +148,9 @@ Legend: [ ] todo, [~] partly done
     keyset/address, ratchet, Sign1, Mac0, Encrypt0, announces, signed message,
     fragments, NACK, link keys, road auth). `Key.from_private()` derives
     public keys; `encrypt0(iv=...)` exists only for these vectors.
-14. [ ] **Live cross-implementation runner:** one script that drives a Python
-    node against a JS or Arduino node over UDP/WebSocket (announce, keyset
-    fetch, message, receipt, link, rotation, path request).
-    `examples/echo_client.py` is a start.
+14. [x] **Live cross-implementation runner.** Done: `interop/live.py` (6
+    checks against an echo bot over UDP/WebSocket); the reference echo bot
+    now also echoes resources and passes 6/6 (tested).
 15. [ ] **Arduino porting note:** the X-Wing HPKE glue over wolfCrypt, the
     HPKE-0/-0-KE key-alg retag, the memory budget for PQ keys and signatures
     on an ESP32, keeping the announce sequence without an RTC, and which

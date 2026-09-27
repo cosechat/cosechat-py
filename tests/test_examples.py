@@ -147,3 +147,25 @@ def test_file_store_policy(tmp_path):
   st.maintain()
   assert st.take(dest) == []
   assert st.put(dest, 1, b'd') and st.take(dest) == [(1, b'd')]
+
+
+def test_live_runner_passes_against_the_reference_bot(tmp_path):
+  ident = tmp_path / 'bot'
+  bot_addr = storage.load_identity(ident).address.hex()
+  bot = subprocess.Popen(
+    [sys.executable, EXAMPLES / 'echo_bot.py', '--identity', ident, '--interval', '60',
+     '--listen', '127.0.0.1:47601', '--peer', '127.0.0.1:47602'],
+    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+  )  # fmt: skip
+  try:
+    time.sleep(1.5)
+    run = subprocess.run(
+      [sys.executable, EXAMPLES.parent / 'interop' / 'live.py', bot_addr, '--timeout', '10',
+       '--udp', '127.0.0.1:47602', '--udp-peer', '127.0.0.1:47601'],
+      capture_output=True, text=True, timeout=120,
+    )  # fmt: skip
+  finally:
+    bot.terminate()
+    bot.communicate(timeout=10)
+  assert run.returncode == 0, run.stdout + run.stderr
+  assert '6/6 checks passed' in run.stdout
