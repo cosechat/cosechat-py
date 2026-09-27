@@ -86,6 +86,19 @@ link-request-body = {
 
 link-accept-body = { 1 => bstr .size 32 }  ; part_b
 
+; resources (large transfers) over a link, one of these per link message
+resource-body = {8 => resource-advert} / {9 => resource-request} / {10 => resource-part} / {11 => resource-id}
+resource-id = bstr .size 16                ; SHA-256(data)[0:16]
+resource-advert = {
+  1 => resource-id,
+  2 => uint,                               ; size
+  3 => uint,                               ; part count
+  4 => bstr .size 32,                      ; SHA-256(data)
+  ? 5 => any,                              ; meta (file name, type, ...)
+}
+resource-request = [resource-id, [* uint]] ; part indexes wanted
+resource-part = [resource-id, uint, bstr]  ; index, data
+
 link-body = {                              ; a message body without `to`
   2 => uint,
   ? 3 => tstr,

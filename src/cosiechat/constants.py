@@ -9,7 +9,7 @@ others, but these are what the reference does.
 
 import inspect
 
-from . import link, message, node, packet, ratchet, store
+from . import link, message, node, packet, ratchet, resource, store
 from .identity import ADDRESS_SIZE
 
 PROTOCOL = [
@@ -25,9 +25,13 @@ PROTOCOL = [
   ('receipt tag', message.RECEIPT_TAG_SIZE, 'bytes of HMAC-SHA-256'),
   ('receipt nonce', packet.RECEIPT_NONCE_SIZE, 'random bytes after the tag'),
   ('NACK indexes', packet.NACK_MAX_INDEXES, 'at most, in one NACK'),
+  ('resource id', resource.RESOURCE_ID_SIZE, 'bytes: SHA-256(data)[0:16]'),
 ]
 
 LIMITS = [
+  ('resource part', resource.PART_SIZE, 'bytes of data per part (fits one LoRa frame)'),
+  ('resource window', resource.WINDOW, 'parts a receiver asks for at a time'),
+  ('resource stalls', node.RESOURCE_STALLS, 'times a receiver re-asks without progress'),
   ('trial ratchets', message.MAX_TRIAL_RATCHETS, 'newest ratchets tried on a shared COSE_Encrypt'),
   (
     'reassembly timeout',
@@ -77,6 +81,7 @@ NODE_NOTES = {
   'max_links': 'links held (least recently used dropped)',
   'path_ttl': 's a path lives after the announce that set it',
   'max_peers': 'peers remembered (least recently heard forgotten first)',
+  'max_resource': 'bytes: the largest resource accepted',
   'announce_cap': 'share of a slow road announces may use',
   'announce_queue_age': 's an announce may wait in the queue',
   'rebroadcast_min_interval': 's between rebroadcasts of one identity',

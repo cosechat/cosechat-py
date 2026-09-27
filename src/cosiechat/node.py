@@ -34,6 +34,7 @@ from typing import Any
 from . import cbor, cose
 from . import link as L
 from . import message as msg
+from . import resource as R
 from .identity import Identity, address_of, signer_of
 from .keys import QUANTUM_SAFE_KEM, Key
 from .packet import (
@@ -76,6 +77,7 @@ WAITING_SENDERS = 256
 FRAGMENT_CACHE_SETS = 32  # sent fragment sets kept for NACKs
 FRAGMENT_CACHE_TIME = 60.0  # s
 NACK_BASE_DELAY = 0.2  # s, added to two frame-times before asking for fragments
+RESOURCE_STALLS = 8  # times a resource receiver re-asks without progress
 ANNOUNCE_QUEUE = 256  # destinations waiting in one road's announce queue
 TIMER_TABLE = 4096  # per-address timers (rate limits) remembered
 KEYSET_WAITS = 256  # short announces / forwarded requests waiting on a keyset
@@ -245,6 +247,7 @@ class Node:
     max_links: int = 256,
     path_ttl: float = 7 * 86400,
     max_peers: int = 10000,
+    max_resource: int = R.MAX_RESOURCE,
     ingress: dict | None = None,
     announce_cap: float = 0.02,
     announce_queue_age: float = 3600.0,
@@ -314,6 +317,14 @@ class Node:
     # peers remembered (identity, announce, path, ratchet); the least recently
     # heard is forgotten first
     self.max_peers = max_peers
+    # resources (large transfers over links): the biggest we accept
+    self.max_resource = max_resource
+    self._res_out: dict[bytes, tuple[R.Outgoing, asyncio.Future]] = {}
+    self._res_in: dict[
+      tuple[bytes, bytes], list
+    ] = {}  # (peer, id) -> [Incoming, timer, stalls, asked]
+    self._res_done: OrderedDict[tuple[bytes, bytes], None] = OrderedDict()
+    self._resource_handlers: list[Callable] = []
     self._peers: OrderedDict[bytes, None] = OrderedDict()
     self.ingress = {**INGRESS, **(ingress or {})}
     self.links: OrderedDict[bytes, L.LinkKeys] = OrderedDict()  # link id -> keys, LRU order
@@ -388,6 +399,47 @@ class Node:
   def on_announce(self, cb: Callable[[msg.Announce, Path], Any]):
     self._announce_handlers.append(cb)
     return cb
+
+  def on_resource(self, cb: Callable[[R.Resource], Any]):
+    """cb(resource) when a large transfer from a peer has arrived whole."""
+    self._resource_handlers.append(cb)
+    return cb
+
+  async def send_resource(self, to, data: bytes, meta: Any = None, timeout: float = 600.0) -> bool:
+    """
+    Send `data` (any size up to the peer's limit) over a link, opening one if
+    needed. True once the peer confirms it has all of it, intact.
+    """
+    addr = to.address if isinstance(to, Identity) else to
+    keys = self.link_to(addr) or await self.open_link(to, timeout)
+    out = R.Outgoing.of(addr, data, meta)
+    fut = asyncio.get_running_loop().create_future()
+    self._res_out[out.id] = (out, fut)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    try:
+      quiet = self.retry_after  # silence before we advertise again (backs off)
+      while True:
+        # (re)advertise when the receiver has not been heard from for a while:
+        # at the start, and if our last part or its `done` got lost
+        if loop.time() - out.active >= quiet:
+          live = self.link_to(addr)
+          if live is None or live.link_id != keys.link_id:
+            return False
+          ad = R.encode(R.R_ADVERTISE, out.advertisement())
+          await self._send_data(addr, L.seal(live, ad), LINK_DATA)
+          if out.active != float('-inf'):
+            quiet = min(quiet * 2, self.retry_max)
+          out.active = loop.time()
+        left = deadline - loop.time()
+        if left <= 0:
+          return False
+        try:
+          return await asyncio.wait_for(asyncio.shield(fut), min(self.retry_after, left))
+        except TimeoutError:
+          pass
+    finally:
+      self._res_out.pop(out.id, None)
 
   def on_receipt(self, cb: Callable[[msg.Message, bytes], Any]):
     """cb(message, recipient address) when a recipient confirms it opened a message."""
@@ -1065,6 +1117,97 @@ class Node:
     self._prune(self._rediscover_at)
     self._spawn(self.request_path(address, self.retry_after, fresh=True))
 
+  # --- resources ---
+
+  def _resource_send(self, keys: L.LinkKeys, field_id: int, value):
+    self._spawn(self._send_data(keys.peer, L.seal(keys, R.encode(field_id, value)), LINK_DATA))
+
+  def _handle_resource(self, keys: L.LinkKeys, body: dict):
+    peer = keys.peer
+    if R.R_ADVERTISE in body:
+      ad = body[R.R_ADVERTISE]
+      rid = ad.get(1) if isinstance(ad, dict) else None
+      if (peer, rid) in self._res_done:
+        self._resource_send(keys, R.R_DONE, rid)  # our done was lost
+        return
+      if (peer, rid) not in self._res_in:
+        try:
+          inc = R.Incoming.from_advertisement(peer, ad, self.max_resource)
+        except Exception as e:
+          log.debug('%s: refused resource: %r', self, e)
+          return
+        self._res_in[(peer, inc.id)] = [inc, None, 0, []]
+      self._resource_ask(keys, rid)
+    elif R.R_REQUEST in body:
+      rid, want = body[R.R_REQUEST]
+      entry = self._res_out.get(rid)
+      if entry is None or entry[0].peer != peer:
+        return
+      out = entry[0]
+      out.active = asyncio.get_running_loop().time()
+      for i in list(dict.fromkeys(want))[: 2 * R.WINDOW]:
+        if isinstance(i, int) and 0 <= i < len(out.parts):
+          self._resource_send(keys, R.R_PART, [rid, i, out.parts[i]])
+    elif R.R_PART in body:
+      rid, index, data = body[R.R_PART]
+      entry = self._res_in.get((peer, rid))
+      if entry is None:
+        return
+      inc = entry[0]
+      inc.add(index, data)
+      entry[2] = 0  # progress: reset the stall count
+      if inc.complete:
+        self._resource_finish(keys, entry)
+      elif all(i in inc.parts for i in entry[3]):
+        self._resource_ask(keys, rid)  # this window is in: ask for the next
+    elif R.R_DONE in body:
+      entry = self._res_out.get(body[R.R_DONE])
+      if entry and entry[0].peer == peer and not entry[1].done():
+        entry[1].set_result(True)
+
+  def _resource_ask(self, keys: L.LinkKeys, rid: bytes):
+    entry = self._res_in.get((keys.peer, rid))
+    if entry is None:
+      return
+    want = entry[0].missing(R.WINDOW)
+    entry[3] = want
+    self._resource_send(keys, R.R_REQUEST, [rid, want])
+    if entry[1]:
+      entry[1].cancel()
+    path = self.path(keys.peer)
+    frame = path.lane.frame_time if path else 0.0
+    delay = max(0.3, 2 * R.WINDOW * frame)
+    entry[1] = asyncio.get_running_loop().call_later(delay, self._resource_stalled, keys, rid)
+
+  def _resource_stalled(self, keys: L.LinkKeys, rid: bytes):
+    entry = self._res_in.get((keys.peer, rid))
+    if entry is None:
+      return
+    entry[2] += 1
+    if entry[2] > RESOURCE_STALLS:
+      log.debug('%s: giving up on resource %s', self, rid.hex())
+      self._res_in.pop((keys.peer, rid), None)
+      return
+    self._resource_ask(keys, rid)
+
+  def _resource_finish(self, keys: L.LinkKeys, entry: list):
+    inc = entry[0]
+    if entry[1]:
+      entry[1].cancel()
+    self._res_in.pop((keys.peer, inc.id), None)
+    try:
+      data = inc.assemble()
+    except Exception as e:
+      log.debug('%s: resource failed its hash: %r', self, e)
+      return
+    self._res_done[(keys.peer, inc.id)] = None
+    while len(self._res_done) > DELIVERED_CACHE:
+      self._res_done.popitem(last=False)
+    self._resource_send(keys, R.R_DONE, inc.id)
+    res = R.Resource(keys.peer, inc.id, data, inc.meta)
+    for cb in self._resource_handlers:
+      self._call(cb, res)
+
   def _handle_receipt(self, p: Packet):
     o = self._outbox.pop(p.payload[: msg.RECEIPT_TAG_SIZE], None)
     if o is None or o.future.done():
@@ -1122,7 +1265,13 @@ class Node:
     if keys is None:
       return
     try:
-      m, close = L.read_message(keys, self.address, L.unseal(keys, p.payload))
+      plain = L.unseal(keys, p.payload)
+      body = cbor.loads(plain)
+      if isinstance(body, dict) and body.keys() & {R.R_ADVERTISE, R.R_REQUEST, R.R_PART, R.R_DONE}:
+        self._used_link(keys.link_id)
+        self._handle_resource(keys, body)
+        return
+      m, close = L.read_message(keys, self.address, plain)
     except Exception as e:
       log.debug('%s: bad link message: %r', self, e)
       return

@@ -10,6 +10,7 @@ All inputs have fixed lengths, so the numbers are deterministic.
 
 from . import link as L
 from . import message as M
+from . import resource as R
 from .identity import SUITES, Identity
 from .packet import (
   ANNOUNCE,
@@ -57,6 +58,8 @@ def measure(suite: str) -> dict:
   out['link accept'] = pkt(LINK_ACCEPT, accept)
   body = L.message_body(TEXT, receipt_secret=b'\x00' * 16)
   out['link message'] = pkt(LINK_DATA, L.seal(kb, body))
+  part = R.encode(R.R_PART, [b'\x00' * 16, 0, b'\x00' * R.PART_SIZE])
+  out['resource part'] = pkt(LINK_DATA, L.seal(kb, part))
   return out
 
 

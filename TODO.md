@@ -64,6 +64,7 @@ and will be ported from this repo. The docs are the porting guide:
   (`uv run ruff format && uv run ruff check`, config in `pyproject.toml`).
   C uses `.clang-format` (copy from `~/.claude/formatting/`) when C is added.
 * After any wire change: `uv run python -m cosiechat.vectors > tests/vectors/vectors.json`,
+  `uv run python scripts/sync_spec.py` (refreshes the generated SPEC sections),
   run the tests, and run the wolfCOSE checker (below).
 * wolfCOSE checker: build wolfSSL (CMake: `-DWOLFSSL_MLDSA=yes -DWOLFSSL_MLKEM=yes
   -DWOLFSSL_HPKE=yes -DWOLFSSL_ED25519=yes -DWOLFSSL_CURVE25519=yes
@@ -121,9 +122,9 @@ Legend: [ ] todo, [~] partly done
    token buckets for announce verification, link requests, messages for us,
    and path/keyset requests (`Node(ingress=...)`); peers capped at
    `max_peers` (LRU); announce queue, timer tables and keyset waits capped.
-7. [ ] **Large transfers (like Reticulum Resources):** chunking, windowing and
-   a whole-object hash, over links, for attachments. Today attachments ride
-   in `fields` inside one message.
+7. [x] **Large transfers.** Done (SPEC §9.3, `resource.py`):
+   `send_resource()` / `on_resource()` over links, receiver-pulled windows of
+   LoRa-frame-sized parts, SHA-256 check, size limit, lost-`done` recovery.
 8. [ ] **Propagation nodes like LXMF's:** clients hand messages to a chosen
    propagation node and later fetch theirs, instead of relying on a node that
    happens to be on the path. Needs a small request/response protocol.

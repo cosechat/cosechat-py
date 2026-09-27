@@ -106,6 +106,13 @@ def test_message_and_link_bodies():
   valid('link-body', body)
   valid('link-body', L.message_body(close=True))
   valid('link-data-payload', bstr(L.seal(kb, body)))
+  from cosiechat import resource as R
+
+  out = R.Outgoing.of(a.address, b'z' * 1000, {'name': 'f'})
+  valid('resource-body', R.encode(R.R_ADVERTISE, out.advertisement()))
+  valid('resource-body', R.encode(R.R_REQUEST, [out.id, [0, 1, 2]]))
+  valid('resource-body', R.encode(R.R_PART, [out.id, 0, out.parts[0]]))
+  valid('resource-body', R.encode(R.R_DONE, out.id))
 
 
 def test_every_frame_a_live_mesh_sends():
