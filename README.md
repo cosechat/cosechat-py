@@ -45,6 +45,7 @@ src/cosiechat/
   cose.py       Sign1, Sign, Mac0, Mac, Encrypt0, Encrypt (RFC 9052 structures)
   identity.py   keyset -> address, suites (pq / hybrid / prequantum)
   message.py    seal / unseal, announces
+  contact.py    address text with a checksum, contact cards (cosiechat: URIs)
   ratchet.py    ratchet keys (forward secrecy): mechanism only, no clocks
   link.py       sessions: PQ handshake, then symmetric messages
   packet.py     packets, fragmentation, road auth (Mac0 / Encrypt0 per frame)

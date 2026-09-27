@@ -167,9 +167,9 @@ Legend: [ ] todo, [~] partly done
     and `tests/test_keys_private_api.py` (helper present, aad really bound).
     When 51 comes out: run that test, then raise the bound.
 19. [ ] Test the RNode road on real hardware (so far only the emulator).
-20. [ ] **Contact card:** since an address alone is not enough to message
-    someone (you need their announce), define a share format (a signed full
-    announce as a URI/QR) and a human address display with a checksum.
+20. [x] **Contact cards and address text.** Done (SPEC §7, `contact.py`):
+    `cosiechat:` URIs of a signed full announce, `Node.contact_card()` /
+    `add_contact()`, base32 address text with a checksum; chat `/card`, `/add`.
 21. [ ] Several destinations per identity (Reticulum "aspects"), or several
     identities per node.
 22. [ ] Packaging: versioning, changelog, CI (tests + ruff + wolfCOSE

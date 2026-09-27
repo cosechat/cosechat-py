@@ -36,7 +36,8 @@ Known limits of cosiechat as it stands. The wire format is in
   encryption key, so knowing an address or keyset is not enough: the
   announce carries the ratchet. First contact needs an announce (a path
   request triggers one), and sharing a contact out of band means sharing a
-  signed announce, not just an address. A message sealed to a ratchet the
+  contact card (a signed announce, `cosiechat:` URI), not just an address. A
+  `pq` card is ~6.6 KB, too big for one QR code. A message sealed to a ratchet the
   recipient has since deleted can no longer be opened, which includes
   messages held too long by a store-and-forward node.
 * **Short announces need the keyset from somewhere.** A node that has never

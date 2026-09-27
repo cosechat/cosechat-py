@@ -297,6 +297,17 @@ old path or ratchet. The sequence only orders an identity's own announces,
 and is never compared with the receiver's clock. The reference uses Unix ms
 and never goes backwards; a device without a clock can use a persisted counter.
 
+**Sharing a contact.** An address lets a mesh find someone (a path request
+brings their announce), but messaging needs their keyset and ratchet. A
+**contact card** is simply a signed full announce, as a URI:
+`cosiechat:` + base64url(announce) (no padding). A receiver checks it like any
+announce (pinning and the quantum-safe policy apply). For people, addresses
+are written as **address text**: base32 (RFC 4648, lowercase, no padding) of
+the 16 bytes, then 4 base32 characters of `SHA-256("cosiechat address" ||
+address)` as a checksum, grouped by 5 with dashes; implementations SHOULD
+also accept plain hex. A `pq` card is ~6.6 KB, too big for one QR code;
+share the address text there and let the mesh fetch the rest.
+
 ### 7.1 Ratchets
 
 Like Reticulum's ratchets, but required and post-quantum. They are the only

@@ -498,6 +498,39 @@ class Node:
       if lane.road.online:
         await lane.announce(p)
 
+  def contact_card(self) -> bytes:
+    """A signed full announce to share out of band (see contact.py for a URI form)."""
+    self._sequence = max(msg.now_ms(), self._sequence + 1)
+    return msg.make_announce(
+      self.identity,
+      self.ratchets.current(),
+      self.app_data,
+      sequence=self._sequence,
+      services=PR.SERVICE_PROPAGATION if self.propagate else 0,
+    )
+
+  def add_contact(self, card: bytes) -> msg.Announce:
+    """
+    Take someone's contact card: their keyset and ratchet become known, so we
+    can message them (the mesh still has to find a path). Pinning and the
+    quantum-safe policy apply as for announces.
+    """
+    ann = msg.verify_announce(card)
+    known = self.identities.get(ann.address)
+    if known is not None and known.public_bytes != ann.identity.public_bytes:
+      raise PermissionError('a different keyset is already pinned to that address')
+    if self.quantum_safe_only and not (
+      ann.identity.quantum_safe and ann.ratchet.alg in QUANTUM_SAFE_KEM
+    ):
+      raise PermissionError('contact is not quantum-safe')
+    prev = self.announces.get(ann.address)
+    if prev is None or ann.sequence >= prev[1].sequence:
+      self.identities[ann.address] = ann.identity
+      self.announces[ann.address] = (card, ann)
+      self.peer_ratchets[ann.address] = ann.ratchet
+      self._heard(ann.address)
+    return ann
+
   def path(self, dest: bytes) -> Path | None:
     """The current path to `dest`, or None (unknown, or expired: then it is forgotten)."""
     p = self.paths.get(dest)

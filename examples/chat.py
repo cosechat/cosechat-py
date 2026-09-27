@@ -8,8 +8,11 @@ Interactive chat node on any roads, with keys kept by examples/storage.py.
 
 At the prompt:
 
-  @<address prefix> <text>   send a message (a full address also finds unknown peers)
+  @<address prefix> <text>   send a message (a full address, hex or address
+                             text, also finds unknown peers)
   <text>                     reply to whoever wrote last
+  /card                      print your contact card (a cosiechat: URI)
+  /add <cosiechat:...>       add someone's contact card
   /peers  /announce  /rotate  /quit
 """
 
@@ -23,7 +26,7 @@ from pathlib import Path
 
 import storage
 
-from cosiechat import SUITES, Node, RoadAuth
+from cosiechat import SUITES, Node, RoadAuth, contact
 
 
 def hostport(s: str, default_host: str) -> tuple[str, int]:
@@ -91,7 +94,8 @@ async def run(a):
     print(f'{label(node, m.sender)}{title}: {m.content}')
 
   async with node:
-    print(f'you are {node.address.hex()} on {", ".join(lane.road.name for lane in node.lanes)}')
+    print(f'you are {contact.address_text(node.address)} ({node.address.hex()})')
+    print(f'on {", ".join(lane.road.name for lane in node.lanes)}')
     announcer = asyncio.create_task(storage.announce_forever(node, a.announce_interval, ratchets))
     loop = asyncio.get_running_loop()
     try:
@@ -107,6 +111,16 @@ async def run(a):
         if line == '/announce':
           await node.announce()
           continue
+        if line == '/card':
+          print(contact.card_uri(node.contact_card()))
+          continue
+        if line.startswith('/add '):
+          try:
+            ann = node.add_contact(contact.card_from_uri(line[5:]))
+            print(f'* added {label(node, ann.address)}')
+          except Exception as e:
+            print(f'! {e}')
+          continue
         if line == '/rotate':
           if node.ratchets is not None:
             await node.rotate_ratchet()
@@ -120,8 +134,11 @@ async def run(a):
           matches = [
             x for x in node.identities if x.hex().startswith(prefix.lower()) and x != node.address
           ]
-          if not matches and len(prefix) == 32:
-            matches = [bytes.fromhex(prefix)]  # unknown yet: send() asks the mesh for it
+          if not matches:
+            try:  # a full address (hex or address text): send() asks the mesh for it
+              matches = [contact.parse_address(prefix)]
+            except Exception:
+              pass
           if len(matches) != 1:
             print(f'! {len(matches)} peers match {prefix!r}')
             continue

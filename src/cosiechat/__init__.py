@@ -1,5 +1,6 @@
 """cosiechat: post-quantum mesh messaging over COSE/CBOR."""
 
+from . import contact
 from .identity import SUITES, Identity
 from .keys import CoseError, Key
 from .message import Announce, Message
