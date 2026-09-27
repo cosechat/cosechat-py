@@ -68,6 +68,13 @@ TYPES = {
 ROUTED = {DATA, RECEIPT, LINK_REQUEST, LINK_ACCEPT, LINK_DATA}
 
 FRAGMENT_ID_SIZE = 8
+REQUEST_TAG_SIZE = 8  # random tag in path and keyset requests
+RECEIPT_NONCE_SIZE = 8  # random bytes after a receipt tag
+NACK_MAX_INDEXES = 4096
+REASSEMBLY_TIMEOUT = 60.0  # incomplete fragment sets are dropped after this (s)
+REASSEMBLY_SETS = 256
+REASSEMBLY_MAX_BYTES = 1 << 20
+REASSEMBLY_DONE_CACHE = 1024  # completed sets remembered, to ignore late resends
 # array(1) + version(1) + type(1) + id(1+8) + index(3) + count(3) + chunk header(3)
 FRAGMENT_OVERHEAD = 21
 
@@ -130,7 +137,7 @@ def decode(frame: bytes):
   if arr[0] == FRAGMENT_NACK:
     if len(arr) != 3 or not isinstance(arr[1], bytes) or not isinstance(arr[2], list):
       raise PacketError('bad nack')
-    if len(arr[2]) > 4096 or not all(isinstance(i, int) and i >= 0 for i in arr[2]):
+    if len(arr[2]) > NACK_MAX_INDEXES or not all(isinstance(i, int) and i >= 0 for i in arr[2]):
       raise PacketError('bad nack')
     return Nack(arr[1], arr[2])
   if arr[0] not in TYPES or len(arr) != 5:
@@ -158,7 +165,12 @@ def fragment(frame: bytes, chunk_size: int, fid: bytes | None = None) -> list[by
 class Reassembler:
   """Collects fragments per (source key, fragment id). Incomplete sets expire."""
 
-  def __init__(self, timeout: float = 60.0, max_sets: int = 256, max_size: int = 1 << 20):
+  def __init__(
+    self,
+    timeout: float = REASSEMBLY_TIMEOUT,
+    max_sets: int = REASSEMBLY_SETS,
+    max_size: int = REASSEMBLY_MAX_BYTES,
+  ):
     self.timeout = timeout
     self.max_sets = max_sets
     self.max_size = max_size
@@ -196,7 +208,7 @@ class Reassembler:
     if len(entry['chunks']) == count:
       self._sets.pop(key)
       self._done[key] = None
-      if len(self._done) > 1024:
+      if len(self._done) > REASSEMBLY_DONE_CACHE:
         self._done.popitem(last=False)
       return b''.join(entry['chunks'][i] for i in range(count))
     return None

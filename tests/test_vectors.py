@@ -53,3 +53,22 @@ def test_spec_size_table_matches_the_code():
   spec = (Path(__file__).parents[1] / 'SPEC.md').read_text()
   inside = spec.split('<!-- sizes -->\n')[1].split('\n<!-- /sizes -->')[0]
   assert inside == table(), 'SPEC.md sizes are stale: paste the output of `cosiechat sizes`'
+
+
+def test_spec_constants_table_matches_the_code():
+  from cosiechat.constants import table
+
+  spec = (Path(__file__).parents[1] / 'SPEC.md').read_text()
+  inside = spec.split('<!-- constants -->\n')[1].split('\n<!-- /constants -->')[0]
+  assert inside == table(), 'SPEC.md §16 is stale: paste the output of `cosiechat constants`'
+
+
+def test_every_numeric_node_setting_is_documented():
+  import inspect
+
+  from cosiechat.constants import NODE_NOTES
+  from cosiechat.node import Node
+
+  for name, p in inspect.signature(Node.__init__).parameters.items():
+    if isinstance(p.default, (bool, int, float)) or name == 'announce_interval':
+      assert name in NODE_NOTES, f'Node({name}=...) needs a line in constants.NODE_NOTES'

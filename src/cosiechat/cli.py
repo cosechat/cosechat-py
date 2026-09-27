@@ -6,6 +6,7 @@ cosiechat developer tool.
   cosiechat vectors [-o FILE]                                write interop test vectors
   cosiechat check FILE                                       verify vectors from any implementation
   cosiechat sizes                                            measured wire sizes (Markdown)
+  cosiechat constants                                        every constant and default (Markdown)
 
 Running a node, and how its keys are stored, is up to the application: see
 examples/chat.py and examples/storage.py.
@@ -95,6 +96,9 @@ def main(argv=None):
   s = sub.add_parser('check', help='verify a test vector file')
   s.add_argument('file')
   s.set_defaults(fn=cmd_check)
+
+  s = sub.add_parser('constants', help='print every constant and default')
+  s.set_defaults(fn=lambda a: print(__import__('cosiechat.constants', fromlist=['table']).table()))
 
   s = sub.add_parser('sizes', help='print measured wire sizes')
   s.set_defaults(fn=lambda a: print(__import__('cosiechat.sizes', fromlist=['table']).table()))

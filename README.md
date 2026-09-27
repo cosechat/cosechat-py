@@ -67,6 +67,7 @@ uv run pytest                      # no hardware needed
 uv run cosiechat keygen -o me.key  # dev tool: new identity (plain keyset)
 uv run cosiechat info me.key
 uv run cosiechat sizes             # measured wire sizes
+uv run cosiechat constants         # every constant and default
 uv run examples/chat.py --name alice --udp 4242
 uv run examples/chat.py --lock --udp 4242           # passphrase-encrypt keys at rest
 uv run examples/chat.py --ws-server 4243 --transport  # a hub for browsers

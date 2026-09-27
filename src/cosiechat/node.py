@@ -48,6 +48,8 @@ from .packet import (
   LINK_REQUEST,
   PATH_REQUEST,
   RECEIPT,
+  RECEIPT_NONCE_SIZE,
+  REQUEST_TAG_SIZE,
   ROUTED,
   Nack,
   Packet,
@@ -63,6 +65,17 @@ from .roads import Road
 from .store import MemoryStore, Store
 
 log = logging.getLogger('cosiechat.node')
+
+# bounds on in-memory state (local policy, not protocol)
+SEEN_CACHE = 50000  # packet hashes remembered for duplicate filtering
+DELIVERED_CACHE = 10000  # message ids handed to the application
+DELIVERY_RESULTS = 1000  # sent messages whose delivery can be awaited
+ACCEPT_CACHE = 256  # link accepts kept to answer repeated requests
+WAITING_PER_SENDER = 16  # messages held while fetching an unknown sender's keyset
+WAITING_SENDERS = 256
+FRAGMENT_CACHE_SETS = 32  # sent fragment sets kept for NACKs
+FRAGMENT_CACHE_TIME = 60.0  # s
+NACK_BASE_DELAY = 0.2  # s, added to two frame-times before asking for fragments
 
 
 @dataclass
@@ -106,7 +119,7 @@ class _Lane:
     self.max_age = max_age
     # fragments we sent, kept briefly so a receiver can ask for missing ones
     self._sent: OrderedDict[bytes, tuple[list[bytes], float]] = OrderedDict()
-    self.fragment_cache_time = 60.0
+    self.fragment_cache_time = FRAGMENT_CACHE_TIME
     self.queue: dict[bytes, tuple[int, float, Packet]] = {}  # dest -> (hops, queued at, packet)
     self._ready_at = 0.0
     self._wake = asyncio.Event()
@@ -128,7 +141,7 @@ class _Lane:
       fid = os.urandom(FRAGMENT_ID_SIZE)
       frames = fragment(frame, self.max_frame - FRAGMENT_OVERHEAD, fid)
       self._sent[fid] = (frames, time.monotonic() + self.fragment_cache_time)
-      while len(self._sent) > 32:
+      while len(self._sent) > FRAGMENT_CACHE_SETS:
         self._sent.popitem(last=False)
     total = 0
     for f in frames:
@@ -411,7 +424,7 @@ class Node:
       return self.identities[address]
     fut = asyncio.get_running_loop().create_future()
     self._waiters.setdefault(address, []).append(fut)
-    p = Packet(PATH_REQUEST, 0, address, None, random.randbytes(8))
+    p = Packet(PATH_REQUEST, 0, address, None, random.randbytes(REQUEST_TAG_SIZE))
     self._mark_seen(p.hash)
     await self._broadcast(p)
     try:
@@ -503,7 +516,7 @@ class Node:
     )
     self._outbox[msg.receipt_tag(m.receipt_secret, addr)] = o
     self._deliveries.setdefault(m.id, []).append(o.future)
-    while len(self._deliveries) > 1000:
+    while len(self._deliveries) > DELIVERY_RESULTS:
       self._deliveries.popitem(last=False)
     self._spawn(self._retry(o))
 
@@ -665,7 +678,7 @@ class Node:
     if h in self._seen:
       return False
     self._seen[h] = None
-    if len(self._seen) > 50000:
+    if len(self._seen) > SEEN_CACHE:
       self._seen.popitem(last=False)
     return True
 
@@ -726,7 +739,7 @@ class Node:
 
   def _nack_delay(self, lane: _Lane) -> float:
     # a gap of about two frame-times means fragments went missing
-    return 2 * lane.frame_time + 0.2
+    return 2 * lane.frame_time + NACK_BASE_DELAY
 
   def _watch_fragments(self, lane: _Lane, fid: bytes, complete: bool):
     """(Re)start the stall timer of an incomplete fragment set; stop it when complete."""
@@ -813,7 +826,7 @@ class Node:
     if now < self._keyset_requested_at.get(address, 0.0):
       return
     self._keyset_requested_at[address] = now + self.retry_after
-    p = Packet(KEYSET_REQUEST, 0, address, None, random.randbytes(8))
+    p = Packet(KEYSET_REQUEST, 0, address, None, random.randbytes(REQUEST_TAG_SIZE))
     self._mark_seen(p.hash)
     self._spawn(self._send_all(p))
 
@@ -915,7 +928,7 @@ class Node:
     except msg.SenderUnknown as e:
       # e.g. we restarted and forgot them: fetch their keyset, then try again
       q = self._waiting_messages.setdefault(e.address, [])
-      if len(q) < 16 and len(self._waiting_messages) <= 256:
+      if len(q) < WAITING_PER_SENDER and len(self._waiting_messages) <= WAITING_SENDERS:
         q.append(p)
       self._request_keyset(e.address)
       return
@@ -938,11 +951,11 @@ class Node:
     if m.receipt_secret is not None:
       # always answer, even for a repeat: our last receipt may have been lost
       tag = msg.receipt_tag(m.receipt_secret, self.address)
-      self._spawn(self._send_data(m.sender, tag + os.urandom(8), RECEIPT))
+      self._spawn(self._send_data(m.sender, tag + os.urandom(RECEIPT_NONCE_SIZE), RECEIPT))
     if m.id in self._delivered:
       return
     self._delivered[m.id] = None
-    if len(self._delivered) > 10000:
+    if len(self._delivered) > DELIVERED_CACHE:
       self._delivered.popitem(last=False)
     for cb in self._message_handlers:
       self._call(cb, m)
@@ -979,7 +992,7 @@ class Node:
     self.identities.setdefault(peer.address, peer)
     self._add_link(keys)
     self._accepts[lid] = (peer.address, accept)
-    while len(self._accepts) > 256:
+    while len(self._accepts) > ACCEPT_CACHE:
       self._accepts.popitem(last=False)
     self._spawn(self._send_data(peer.address, accept, LINK_ACCEPT))
 
