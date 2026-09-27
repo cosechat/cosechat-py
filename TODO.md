@@ -127,7 +127,9 @@ Legend: [ ] todo, [~] in progress, [x] done
 
 7. [ ] **CDDL** for every structure (packet, fragment, announce body, message
    body, keyset, ratchet key, receipts and sessions once added).
-8. [ ] **Must-reject vectors**: tampered data, kid mismatch, lower announce
+8. [x] **Must-reject vectors.** Done: `reject` in vectors.json (18 cases);
+   `check()` fails if any is accepted, and tests confirm each fails only for
+   its rule. Original note: **Must-reject vectors**: tampered data, kid mismatch, lower announce
    sequence, bad ratchet (wrong KEM, wrong kid, has a private key), not
    addressed to us, unknown sender, pre-quantum peer under the default policy,
    and a long-term-key message when ratchets are required. Extend
@@ -159,5 +161,13 @@ Legend: [ ] todo, [~] in progress, [x] done
 
 ### D. Housekeeping
 
-18. [ ] Create a GitHub remote (ask the user first), push `main`, and open
-    PRs for feature branches.
+18. [ ] Create a GitHub remote (ask the user first), push, and open PRs.
+    Local branches are **stacked**, each one PR, in this order:
+    `main` (baseline) <- `wire-version` <- `receipts` <- `links` <-
+    `flood-control` <- `reject-vectors`. `main` has not been advanced; merge
+    them in order via PRs.
+19. [ ] The wolfCOSE checker binary (`interop/wolfcose/check`) is prebuilt;
+    rebuilding it needs wolfSSL + wolfCOSE built again (see "How to work
+    here"). The last run was 41/41 passing on the current vectors. The reject
+    vectors are not in `make_cases.py` yet (they need the node rules, not
+    only COSE).

@@ -553,7 +553,16 @@ aspects), path expiry policy.
 `tests/vectors/vectors.json` (regenerate with `cosiechat vectors`) holds keys,
 COSE objects for every algorithm, identities with their ratchets, sealed
 messages (to a ratchet, to a long-term key, and a shared multi-recipient
-Encrypt), announces with ratchets, packets and road-auth frames. Signatures
+Encrypt) with receipt tags, announces with ratchets, link handshakes with
+their derived keys and messages, packets and road-auth frames.
+
+`reject` holds cases an implementation MUST refuse, each naming the rule it
+tests: tampering, forwarding to a third party, unknown sender, long-term-key
+messages when ratchets are required, a signature kid naming someone else, a
+pre-quantum sender under the default policy, announces that are tampered,
+for another address, older, or carry a bad ratchet, malformed frames, a link
+request for someone else, a link accept for another request, and a frame
+under the wrong road key. Signatures
 and HPKE are randomized, so vectors are "must accept" cases. Another
 implementation should (1) accept every vector in that file and (2) emit a
 file in the same format that `cosiechat check FILE` accepts.

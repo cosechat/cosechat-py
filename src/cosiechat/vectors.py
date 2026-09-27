@@ -264,6 +264,153 @@ def generate() -> dict:
     }
     for mode in ('mac', 'encrypt')
   ]
+  out['reject'] = _rejects()
+  return out
+
+
+def _flip(b: bytes, pos: int = -3) -> bytes:
+  x = bytearray(b)
+  x[pos] ^= 1
+  return bytes(x)
+
+
+def _rejects() -> list[dict]:
+  """Cases every implementation MUST refuse. Each names the rule it tests."""
+  out = []
+  alice, bob, carol, mallory = (Identity.generate('prequantum') for _ in range(4))
+  rb = new_ratchet(bob.kem_key.alg)
+  rks = {bob.address: rb.public()}
+
+  def ident(i):
+    return _hex(i.to_bytes())
+
+  def message(name, rule, data, me=bob, known=(alice,), ratchets=(rb,), require=True, qso=False):
+    out.append(
+      {
+        'kind': 'message',
+        'name': name,
+        'rule': rule,
+        'me': ident(me),
+        'ratchets': [_key(r) for r in ratchets],
+        'known': [_hex(k.public_bytes) for k in known],
+        'require_ratchet': require,
+        'quantum_safe_only': qso,
+        'data': _hex(data),
+      }
+    )
+
+  good, _ = M.seal(alice, [bob.public()], 'hi', ratchets=rks)
+  message('tampered', 'AEAD tag must verify', _flip(good))
+  signed = cose.decrypt0(good, rb)
+  message(
+    'forwarded to a third party',
+    'reject unless our address is in the signed `to`',
+    cose.encrypt0(signed, carol.public().kem_key),
+    me=carol,
+    ratchets=(),
+    require=False,
+  )
+  message('unknown sender', 'sender keyset must be known or attached', good, known=())
+  lt, _ = M.seal(alice, [bob.public()], 'long-term')
+  message('sealed to long-term key', 'drop when ratchets are required', lt)
+  body = cbor.dumps({M.M_TO: [bob.address], M.M_TIME: 1, M.M_CONTENT: 'x'})
+  forged = cose.sign1(
+    body,
+    K.Key(
+      mallory.sign_keys[0].alg, mallory.sign_keys[0].pub, mallory.sign_keys[0].priv, alice.address
+    ),
+    kid_protected=True,
+  )
+  message(
+    'signature kid names someone else',
+    'the signature must verify with the kid identity keys',
+    M.envelope(forged, bob.public(), rb.public()),
+  )
+  message(
+    'pre-quantum sender under the default policy',
+    'quantum_safe_only drops non-quantum-safe senders',
+    good,
+    qso=True,
+  )
+
+  def announce(name, rule, data, address, previous=None):
+    out.append(
+      {
+        'kind': 'announce',
+        'name': name,
+        'rule': rule,
+        'address': _hex(address),
+        'previous': _hex(previous) if previous else None,
+        'data': _hex(data),
+      }
+    )
+
+  ann = M.make_announce(alice, sequence=10)
+  announce('tampered', 'signature must verify', _flip(ann), alice.address)
+  announce('for another address', 'keyset must hash to dest', ann, bob.address)
+  announce(
+    'older sequence', 'ignore a lower sequence than the last accepted',
+    M.make_announce(alice, sequence=9), alice.address, previous=ann,
+  )  # fmt: skip
+  wrong_kem = new_ratchet(K.HPKE_4)
+  bad_kid = new_ratchet(alice.kem_key.alg)
+  bad_kid.kid = b'\x00' * 8
+  private = new_ratchet(alice.kem_key.alg)
+  for name, rk, as_private in (
+    ('ratchet with another KEM', wrong_kem, False),
+    ('ratchet with a wrong kid', bad_kid, False),
+    ('ratchet carrying its private key', private, True),
+  ):
+    b = {M.A_IDENTITY: alice.public_bytes, M.A_SEQUENCE: 11, M.A_NONCE: b'\x00' * 8}
+    b[M.A_RATCHET] = rk.to_cose(private=as_private)
+    announce(name, 'announced ratchets must match the identity KEM, carry their id, be public',
+             alice.sign(cbor.dumps(b)), alice.address)  # fmt: skip
+
+  for name, frame in (
+    ('future protocol version', cbor.dumps([1, P.DATA, 0, b'\x01' * 16, None, b''])),
+    ('unknown packet type', cbor.dumps([P.VERSION, 99, 0, b'\x01' * 16, None, b''])),
+    ('short address', cbor.dumps([P.VERSION, P.DATA, 0, b'\x01' * 8, None, b''])),
+  ):
+    out.append(
+      {'kind': 'packet', 'name': name, 'rule': 'drop malformed frames', 'data': _hex(frame)}
+    )
+
+  pending = L.make_request(alice, bob.public(), rb.public())
+  out.append(
+    {
+      'kind': 'link_request',
+      'name': 'link request for someone else',
+      'rule': 'a request must name us as the peer',
+      'me': ident(carol),
+      'ratchets': [],
+      'known': [_hex(alice.public_bytes)],
+      'data': _hex(cose.encrypt0(cose.decrypt0(pending.request, rb), carol.public().kem_key)),
+    }
+  )
+  other = L.make_request(alice, bob.public(), rb.public())
+  _, accept, _ = L.accept_request(
+    bob, other.request, {alice.address: alice.public()}.get, ratchets=[rb], quantum_safe_only=False
+  )
+  out.append(
+    {
+      'kind': 'link_accept',
+      'name': 'accept for a different request',
+      'rule': 'the accept is bound to SHA-256(request)',
+      'request': _hex(pending.request),
+      'ephemeral': _key(pending.ephemeral),
+      'data': _hex(pending.link_id + accept[L.LINK_ID_SIZE :]),
+    }
+  )
+  out.append(
+    {
+      'kind': 'road_auth',
+      'name': 'frame under another road key',
+      'rule': 'drop frames that fail road auth',
+      'passphrase': 'right',
+      'mode': 'mac',
+      'data': _hex(P.RoadAuth.from_passphrase('wrong', 'mac').wrap(b'\x80')),
+    }
+  )
   return out
 
 
@@ -403,7 +550,49 @@ def check(vectors: dict) -> list[str]:
       expect(auth.unwrap(bytes.fromhex(v['data'])) == bytes.fromhex(v['expect']), what)
     except Exception as e:
       fails.append(f'{what}: {e!r}')
+  for v in vectors.get('reject', []):
+    what = f'reject {v["kind"]}: {v["name"]}'
+    if _accepted(v):
+      fails.append(f'{what} was accepted ({v["rule"]})')
   return fails
+
+
+def _accepted(v: dict) -> bool:
+  """True if the case gets through; every reject vector must not."""
+  data = bytes.fromhex(v['data'])
+  try:
+    kind = v['kind']
+    if kind in ('message', 'link_request'):
+      me = Identity.from_bytes(bytes.fromhex(v['me']))
+      known = [Identity.from_bytes(bytes.fromhex(h)) for h in v['known']]
+      book = {k.address: k for k in known}.get
+      ratchets = [_k(h) for h in v['ratchets']]
+      if kind == 'link_request':
+        L.read_request(me, data, book, ratchets, quantum_safe_only=False)
+        return True
+      m = M.unseal(me, data, book, ratchets=ratchets, require_ratchet=v['require_ratchet'])
+      sender = book(m.sender) or M.attached_identity(m.signed)
+      return not (v['quantum_safe_only'] and not sender.quantum_safe)
+    if kind == 'announce':
+      a = M.verify_announce(data, bytes.fromhex(v['address']))
+      if v['previous']:
+        prev = M.verify_announce(bytes.fromhex(v['previous']), bytes.fromhex(v['address']))
+        return a.sequence >= prev.sequence
+      return True
+    if kind == 'packet':
+      P.decode(data)
+      return True
+    if kind == 'link_accept':
+      request = bytes.fromhex(v['request'])
+      pending = L.PendingLink(L.link_id(request), b'', request, _k(v['ephemeral']), b'\x00' * 32)
+      L.finish(pending, data)
+      return True
+    if kind == 'road_auth':
+      P.RoadAuth.from_passphrase(v['passphrase'], v['mode']).unwrap(data)
+      return True
+  except Exception:
+    return False
+  raise ValueError(f'unknown reject kind {v["kind"]}')
 
 
 def main():
