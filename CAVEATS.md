@@ -45,9 +45,9 @@ Known limits of cosiechat as it stands. The wire format is in
   useless to that node until the identity sends a full one (it does on
   start-up, and when asked with a path request).
 * **Paths last a week** (local clock, like Reticulum) unless a newer announce
-  replaces them. A path through a transport node that has gone away is only
-  noticed when messages stop getting receipts; the node then needs a new
-  announce or a path request. There is no active path-failure detection yet.
+  replaces them. A dead path is only noticed when messages stop getting
+  receipts; the node then asks for a new one (after two unanswered sends),
+  so the first message after a transport disappears is slow.
 * **No dates are trusted.** The library never expires or rejects anything by
   comparing a peer's timestamp with its own clock. Announce sequence numbers
   only order one identity's own announces. The price: a peer that rotates

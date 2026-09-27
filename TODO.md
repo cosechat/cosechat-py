@@ -113,9 +113,10 @@ Legend: [ ] todo, [~] partly done
 4. [x] **Pluggable store-and-forward.** Done: `Node(store=...)` with
    `put`/`take` (`store.py`, `MemoryStore` default); `examples/storage.py`
    `FileStore` survives restarts (used by `lora_gateway.py`).
-5. [~] **Path upkeep.** Done: week-long expiry (`Node.path()`, `path_ttl`).
-   Left: drop a path after repeated delivery failures, prefer fewer hops
-   among announces of the same sequence, recover when a transport vanishes.
+5. [x] **Path upkeep.** Done (SPEC §9): week-long expiry; the same announce
+   over fewer hops wins; path-request answers get past the duplicate filter;
+   a fresh path request after two unanswered sends; failed deliveries forget
+   the path (`test_paths.py` routes around a vanished transport).
 6. [ ] **Ingress limits.** Cap announces, keyset requests and link requests
    *received* per road per second, and bound the in-memory tables (links,
    keyset waits, rebroadcast timers). Today a noisy neighbour costs CPU (an

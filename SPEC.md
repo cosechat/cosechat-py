@@ -438,6 +438,16 @@ too) and a path table `dest → (road, via, hops, announce sequence, expiry)`.
   it, on the node's own clock (the reference uses a week, like Reticulum).
   Any valid announce refreshes it. With no path, a sender asks with a
   PATH_REQUEST.
+* **Fewer hops win:** a byte-identical copy of an announce already accepted
+  (so it need not be verified again) replaces the path if it came over fewer
+  hops, or if the node is waiting on a path request for that destination (a
+  transport answers one with the announce it cached, which the duplicate
+  filter would otherwise drop).
+* **Dead paths:** when a message has gone unanswered twice, the sender sends
+  a fresh PATH_REQUEST while it keeps retrying; when a delivery gives up, the
+  path is forgotten. A receiver that gets a repeat of a message it already
+  has knows its receipt was lost, so it also asks for a fresh path back to
+  the sender (the way back can die with the same transport).
   A *transport* node rebroadcasts it on all its roads with `hops + 1` and
   `via = own address`, after a small random delay, if `hops + 1 < max_hops` (16).
 * **Sending DATA:** seal to the destination's current ratchet (§7.1), then use the path if there is one: `via = path.via` (null when

@@ -236,6 +236,7 @@ class Node:
     self.announce_queue_age = announce_queue_age
     self.rebroadcast_min_interval = rebroadcast_min_interval
     self._rebroadcast_at: dict[bytes, float] = {}
+    self._rediscover_at: dict[bytes, float] = {}
     # On by default: refuse peers whose keys a quantum attacker could break
     # (ignore their announces, refuse to send to them, drop what they send).
     # Pre-quantum peers need an explicit quantum_safe_only=False.
@@ -618,6 +619,9 @@ class Node:
         if attempt == o.attempts:
           break
         log.debug('%s: resending %s to %s', self, o.message.id.hex()[:8], o.address.hex())
+        if attempt == 2:
+          # twice unanswered: the path may be dead; ask the mesh again meanwhile
+          self._rediscover(o.address)
         try:
           payload, kind = o.reseal()
         except LookupError:
@@ -625,6 +629,8 @@ class Node:
         await self._send_data(o.address, payload, kind)
         wait = min(wait * 2, self.retry_max)
       self._outbox.pop(tag, None)
+      if o.fallback is None:
+        self.paths.pop(o.address, None)  # it did not work: find a new one next time
       result = await o.fallback() if o.fallback else False
       if not o.future.done():
         o.future.set_result(result)
@@ -702,6 +708,8 @@ class Node:
       log.debug('%s: dropped frame on %s: %s', self, lane.road, e)
       return
     if not self._mark_seen(item.hash):
+      if item.type == ANNOUNCE:
+        self._seen_announce_again(lane, item)
       return
     log.debug('%s: %r on %s', self, item, lane.road)
     if item.type == ANNOUNCE:
@@ -793,6 +801,19 @@ class Node:
     for cb in self._announce_handlers:
       self._call(cb, ann, path)
     self._rebroadcast(p)
+
+  def _seen_announce_again(self, lane: _Lane, p: Packet):
+    """
+    A copy of an announce we already accepted (same bytes, so no need to verify
+    again): take it if it came over fewer hops, or if we asked for this path
+    (a transport answers a path request with the announce it cached).
+    """
+    cached = self.announces.get(p.dest)
+    if cached is None or cached[0] != p.payload:
+      return
+    path = self.path(p.dest)
+    if path is None or p.dest in self._waiters or p.hops + 1 < path.hops:
+      self._update_path(lane, p, cached[1].sequence)
 
   def _update_path(self, lane: _Lane, p: Packet, sequence: int) -> Path:
     path = Path(lane, p.via, p.hops + 1, sequence, time.monotonic() + self.path_ttl)
@@ -953,12 +974,22 @@ class Node:
       tag = msg.receipt_tag(m.receipt_secret, self.address)
       self._spawn(self._send_data(m.sender, tag + os.urandom(RECEIPT_NONCE_SIZE), RECEIPT))
     if m.id in self._delivered:
+      # a repeat means our receipt did not arrive: the way back may be dead
+      self._rediscover(m.sender)
       return
     self._delivered[m.id] = None
     if len(self._delivered) > DELIVERED_CACHE:
       self._delivered.popitem(last=False)
     for cb in self._message_handlers:
       self._call(cb, m)
+
+  def _rediscover(self, address: bytes):
+    """Ask for a fresh path to `address`, at most once per retry_after."""
+    now = time.monotonic()
+    if now < self._rediscover_at.get(address, 0.0):
+      return
+    self._rediscover_at[address] = now + self.retry_after
+    self._spawn(self.request_path(address, self.retry_after, fresh=True))
 
   def _handle_receipt(self, p: Packet):
     o = self._outbox.pop(p.payload[: msg.RECEIPT_TAG_SIZE], None)
