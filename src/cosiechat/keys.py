@@ -90,6 +90,11 @@ class Key:
     key.kid = kid
     return key
 
+  @classmethod
+  def from_private(cls, alg: int, priv: bytes, kid: bytes | None = None) -> 'Key':
+    """A full key from its private bytes (seed / d / k): the public half is derived."""
+    return Key(alg, get_alg(alg).public_from_private(priv), priv, kid)
+
 
 class Alg:
   id = 0
@@ -109,6 +114,9 @@ class Alg:
     if m.get(KEY_KTY) != self.kty:
       raise CoseError(f'{self.name} requires kty {self.kty}')
     return Key(self.id, kid=m.get(KEY_KID))
+
+  def public_from_private(self, priv: bytes) -> bytes:
+    raise CoseError(f'{self.name} cannot derive a public key')
 
 
 # --- key shapes ---
@@ -187,6 +195,11 @@ class _Ec2Shape(Alg):
     pub = nums.public_numbers.x.to_bytes(n, 'big') + nums.public_numbers.y.to_bytes(n, 'big')
     return Key(self.id, pub, nums.private_value.to_bytes(n, 'big'))
 
+  def public_from_private(self, priv):
+    curve, n, _ = _EC_CURVES[self.crv]
+    nums = ec.derive_private_key(int.from_bytes(priv, 'big'), curve).public_key().public_numbers()
+    return nums.x.to_bytes(n, 'big') + nums.y.to_bytes(n, 'big')
+
   def _ec_private(self, key):
     if 'prv' not in key._cache:
       curve = _EC_CURVES[self.crv][0]
@@ -224,6 +237,9 @@ class Ed25519Alg(_OkpShape, SignAlg):
   def generate(self):
     prv = ed25519.Ed25519PrivateKey.generate()
     return Key(self.id, prv.public_key().public_bytes_raw(), prv.private_bytes_raw())
+
+  def public_from_private(self, priv):
+    return ed25519.Ed25519PrivateKey.from_private_bytes(priv).public_key().public_bytes_raw()
 
   def sign(self, key, data):
     return ed25519.Ed25519PrivateKey.from_private_bytes(key.priv).sign(data)
@@ -274,6 +290,9 @@ class MlDsaAlg(_AkpShape, SignAlg):
   def generate(self):
     prv = self._prv_cls.generate()
     return Key(self.id, prv.public_key().public_bytes_raw(), prv.private_bytes_raw())
+
+  def public_from_private(self, priv):
+    return self._prv_cls.from_seed_bytes(priv).public_key().public_bytes_raw()
 
   def sign(self, key, data):
     if 'prv' not in key._cache:
@@ -330,6 +349,9 @@ class HpkeOkpAlg(_OkpShape, HpkeAlg):
     prv = x25519.X25519PrivateKey.generate()
     return Key(self.id, prv.public_key().public_bytes_raw(), prv.private_bytes_raw())
 
+  def public_from_private(self, priv):
+    return x25519.X25519PrivateKey.from_private_bytes(priv).public_key().public_bytes_raw()
+
   def _public(self, key):
     return x25519.X25519PublicKey.from_public_bytes(key.pub)
 
@@ -370,6 +392,9 @@ class HpkeXWingAlg(_AkpShape, HpkeAlg):
     seed = os.urandom(32)
     return Key(self.id, xwing_expand(seed)[1], seed)
 
+  def public_from_private(self, priv):
+    return xwing_expand(priv)[1]
+
   def _public(self, key):
     return hpke.MLKEM768X25519PublicKey(
       mlkem.MLKEM768PublicKey.from_public_bytes(key.pub[:1184]),
@@ -393,6 +418,9 @@ class HpkeMlKemAlg(_AkpShape, HpkeAlg):
   def generate(self):
     prv = self._prv_cls.generate()
     return Key(self.id, prv.public_key().public_bytes_raw(), prv.private_bytes_raw())
+
+  def public_from_private(self, priv):
+    return self._prv_cls.from_seed_bytes(priv).public_key().public_bytes_raw()
 
   def _public(self, key):
     return self._pub_cls.from_public_bytes(key.pub)
@@ -434,6 +462,9 @@ class _SymShape(Alg):
 
   def generate(self):
     return Key(self.id, priv=os.urandom(self.key_size))
+
+  def public_from_private(self, priv):
+    return b''
 
 
 class AeadAlg(_SymShape):

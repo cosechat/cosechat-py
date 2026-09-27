@@ -72,3 +72,13 @@ def test_every_numeric_node_setting_is_documented():
   for name, p in inspect.signature(Node.__init__).parameters.items():
     if isinstance(p.default, (bool, int, float)) or name == 'announce_interval':
       assert name in NODE_NOTES, f'Node({name}=...) needs a line in constants.NODE_NOTES'
+
+
+def test_exact_vectors_are_byte_exact():
+  v = json.loads(VECTORS.read_text())
+  assert len(v['exact']) >= 10
+  case = next(c for c in v['exact'] if c['name'] == 'COSE_Sign1 Ed25519')
+  data = bytearray.fromhex(case['expect']['data'])
+  data[-1] ^= 1
+  case['expect']['data'] = data.hex()
+  assert check(v) == ['exact COSE_Sign1 Ed25519: bytes differ']

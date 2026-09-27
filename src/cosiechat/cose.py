@@ -341,8 +341,12 @@ def encrypt0(
   unprotected: dict | None = None,
   external_aad: bytes = b'',
   include_kid: bool = False,
+  iv: bytes | None = None,
 ) -> bytes:
-  """`key` is a shared AEAD key, or the recipient's HPKE public key (integrated mode)."""
+  """
+  `key` is a shared AEAD key, or the recipient's HPKE public key (integrated mode).
+  `iv` fixes the AEAD IV: only for byte-exact test vectors, never reuse one.
+  """
   kid = key.kid if include_kid else None
   if isinstance(key.algorithm, HpkeAlg):
     alg = hpke_variant(key, integrated=True)
@@ -355,7 +359,7 @@ def encrypt0(
     alg = _aead_alg(key.alg)
     p, u = _headers(alg.id, protected, unprotected, kid)
     rp = _prot(p)
-    iv = os.urandom(alg.iv_size)
+    iv = iv or os.urandom(alg.iv_size)
     u[H_IV] = iv
     ct = alg.encrypt(key.priv, iv, plaintext, cbor.dumps(['Encrypt0', rp, external_aad]))
   return cbor.dumps(cbor.CBORTag(TAG_ENCRYPT0, [rp, u, ct]))

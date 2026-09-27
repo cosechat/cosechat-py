@@ -144,9 +144,10 @@ Legend: [ ] todo, [~] partly done
     announces and paths, routing, send/retry, links/resources/propagation).
 12. [x] **Security considerations.** Done: SPEC §18 (threat model, what each
     party learns, authenticity, forward secrecy, replay, DoS).
-13. [ ] **Byte-exact vectors** where the output is deterministic: Ed25519,
-    HMAC, AEAD with a fixed IV, packet and fragment encodings, receipt tags,
-    link key derivation (from fixed parts).
+13. [x] **Byte-exact vectors.** Done: `exact` in vectors.json (12 cases:
+    keyset/address, ratchet, Sign1, Mac0, Encrypt0, announces, signed message,
+    fragments, NACK, link keys, road auth). `Key.from_private()` derives
+    public keys; `encrypt0(iv=...)` exists only for these vectors.
 14. [ ] **Live cross-implementation runner:** one script that drives a Python
     node against a JS or Arduino node over UDP/WebSocket (announce, keyset
     fetch, message, receipt, link, rotation, path request).

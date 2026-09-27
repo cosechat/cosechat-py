@@ -716,9 +716,16 @@ malformed frames; a
 link request for someone else; a link accept for another request; and a frame
 under the wrong road key.
 
+`exact` holds byte-exact cases: fixed inputs and deterministic algorithms
+(Ed25519, HMAC, AEAD with a given IV, CBOR, SHA-256, HKDF), for debugging an
+encoder byte by byte: identity keyset and address, ratchet COSE_Key and id,
+Sign1, Mac0, Encrypt0, full and short announces with packet bytes and hash,
+a signed message layer with its id and receipt tag, fragment splits, a NACK,
+link key derivation, and a road-auth frame. Keys are given as private bytes.
+
 Another implementation should (1) accept every vector in that file, refusing
-every `reject` case, and (2) emit a file in the same format that
-`cosiechat check FILE` accepts.
+every `reject` case and reproducing every `exact` case, and (2) emit a file in
+the same format that `cosiechat check FILE` accepts.
 
 `interop/wolfcose` runs the vectors through stock wolfCOSE + wolfSSL (the
 Arduino stack): `make test WOLFSSL_PREFIX=… WOLFCOSE_DIR=…`. Today it accepts

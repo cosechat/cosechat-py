@@ -16,7 +16,7 @@ from . import link as L
 from . import message as M
 from . import packet as P
 from .identity import SUITES, Identity
-from .ratchet import new_ratchet
+from .ratchet import new_ratchet, ratchet_id
 
 
 def _hex(b: bytes) -> str:
@@ -268,6 +268,127 @@ def generate() -> dict:
     for mode in ('mac', 'encrypt')
   ]
   out['reject'] = _rejects()
+  out['exact'] = _exact()
+  return out
+
+
+def _exact() -> list[dict]:
+  """
+  Byte-exact cases: fixed inputs, deterministic algorithms (Ed25519, HMAC,
+  AEAD with a given IV, CBOR, SHA-256, HKDF). Another implementation must
+  produce exactly `expect`. Keys are given by their private bytes (derive
+  the public half); `seed(n)` = bytes n, n+1, ... (32 of them, mod 256).
+  """
+  from .keys import A256GCM, ED25519, HMAC_256_256, HPKE_0
+
+  def seed(n, size=32):
+    return bytes((n + i) % 256 for i in range(size))
+
+  out = []
+
+  def case(name, inputs, expect):
+    out.append({'name': name, 'inputs': inputs, 'expect': expect})
+
+  sk = K.Key.from_private(ED25519, seed(1))
+  alice = Identity([sk])
+  case(
+    'identity (prequantum)',
+    {'ed25519_private': _hex(seed(1))},
+    {'keyset': _hex(alice.public_bytes), 'address': _hex(alice.address)},
+  )
+  rk = K.Key.from_private(HPKE_0, seed(40))
+  rk.kid = ratchet_id(rk.pub)
+  case(
+    'ratchet (HPKE-0)',
+    {'p256_private': _hex(seed(40))},
+    {'cose_key': _hex(cbor.dumps(rk.public().to_cose())), 'ratchet_id': _hex(rk.kid)},
+  )
+  case(
+    'COSE_Sign1 Ed25519',
+    {'ed25519_private': _hex(seed(1)), 'payload': _hex(b'cosiechat'), 'kid': _hex(b'k')},
+    {
+      'data': _hex(
+        cose.sign1(b'cosiechat', K.Key(ED25519, sk.pub, sk.priv, b'k'), kid_protected=True)
+      )
+    },
+  )
+  mk = K.Key(HMAC_256_256, priv=seed(80))
+  case(
+    'COSE_Mac0 HMAC 256/256',
+    {'key': _hex(seed(80)), 'payload': _hex(b'cosiechat')},
+    {'data': _hex(cose.mac0(b'cosiechat', mk))},
+  )
+  ek = K.Key(A256GCM, priv=seed(120))
+  case(
+    'COSE_Encrypt0 A256GCM',
+    {'key': _hex(seed(120)), 'iv': _hex(seed(160, 12)), 'plaintext': _hex(b'cosiechat')},
+    {'data': _hex(cose.encrypt0(b'cosiechat', ek, iv=seed(160, 12)))},
+  )
+  for full in (True, False):
+    ann = M.make_announce(alice, rk, {'name': 'alice'}, sequence=1700000000000, full=full)
+    pkt = P.Packet(P.ANNOUNCE, 0, alice.address, None, ann)
+    case(
+      f'announce ({"full" if full else "short"})',
+      {
+        'identity': 'identity (prequantum)',
+        'ratchet': 'ratchet (HPKE-0)',
+        'sequence': 1700000000000,
+        'app_data_cbor': _hex(cbor.dumps({'name': 'alice'})),
+      },
+      {'announce': _hex(ann), 'packet': _hex(pkt.encode()), 'packet_hash': _hex(pkt.hash)},
+    )
+  bob = Identity([K.Key.from_private(ED25519, seed(2))])
+  m = M.sign_message(
+    alice,
+    [bob],
+    'hi bob',
+    'hello',
+    {1: b'x'},
+    timestamp=1700000000001,
+    receipt_secret=seed(200, 16),
+  )
+  case(
+    'signed message layer',
+    {
+      'sender': 'identity (prequantum)',
+      'recipient_ed25519_private': _hex(seed(2)),
+      'content': 'hi bob',
+      'title': 'hello',
+      'fields_cbor': _hex(cbor.dumps({1: b'x'})),
+      'timestamp': 1700000000001,
+      'receipt_secret': _hex(seed(200, 16)),
+    },
+    {
+      'signed': _hex(m.signed),
+      'message_id': _hex(m.id),
+      'receipt_tag': _hex(M.receipt_tag(seed(200, 16), bob.address)),
+    },
+  )
+  frame = bytes(range(256)) * 3
+  frags = P.fragment(frame, 300, seed(9, 8))
+  case(
+    'fragments',
+    {'frame': _hex(frame), 'chunk_size': 300, 'fragment_id': _hex(seed(9, 8))},
+    {'fragments': [_hex(f) for f in frags]},
+  )
+  case(
+    'nack',
+    {'fragment_id': _hex(seed(9, 8)), 'missing': [0, 2]},
+    {'frame': _hex(P.nack(seed(9, 8), [0, 2]))},
+  )
+  keys = L._derive(seed(20, 16), seed(30), seed(60), b'\x00' * 16, initiator=True)
+  case(
+    'link keys',
+    {'link_id': _hex(seed(20, 16)), 'part_a': _hex(seed(30)), 'part_b': _hex(seed(60))},
+    {'a_to_b': _hex(keys.send_key.priv), 'b_to_a': _hex(keys.recv_key.priv)},
+  )
+  road = P.RoadAuth.from_passphrase('cosiechat vectors', 'mac')
+  frame = P.Packet(P.PATH_REQUEST, 0, seed(3, 16), None, seed(4, 8)).encode()
+  case(
+    'road auth (mac)',
+    {'passphrase': 'cosiechat vectors', 'frame': _hex(frame)},
+    {'key': _hex(road.key.priv), 'data': _hex(road.wrap(frame))},
+  )
   return out
 
 
@@ -573,6 +694,15 @@ def check(vectors: dict) -> list[str]:
       expect(auth.unwrap(bytes.fromhex(v['data'])) == bytes.fromhex(v['expect']), what)
     except Exception as e:
       fails.append(f'{what}: {e!r}')
+  if 'exact' in vectors:
+    mine = {c['name']: c for c in _exact()}
+    for c in vectors['exact']:
+      ours = mine.get(c['name'])
+      if ours is None:
+        fails.append(f'exact {c["name"]}: unknown case')
+      elif ours['inputs'] != c['inputs'] or ours['expect'] != c['expect']:
+        fails.append(f'exact {c["name"]}: bytes differ')
+
   for v in vectors.get('reject', []):
     what = f'reject {v["kind"]}: {v["name"]}'
     if _accepted(v):
