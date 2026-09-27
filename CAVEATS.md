@@ -99,7 +99,11 @@ Known limits of cosiechat as it stands. The wire format is in
 | `prequantum` | ~360 B (1 frame) | ~260 B (1 frame) |
 
 Post-quantum keys and signatures are kilobytes, and announces also carry a
-~1.2 KB X-Wing ratchet. On slow LoRa settings a PQ
+~1.2 KB X-Wing ratchet. Within the 2% announce budget (SPEC §9.0), a LoRa
+channel carries one PQ announce about every 10 minutes at SF7, 17 minutes at
+SF8, and 3 hours at SF12, shared by *every* node on it. Meshes with many
+nodes on slow LoRa settings will be slow to learn paths. Links (SPEC §9.2)
+make the per-message cost small once a path is known. On slow LoRa settings a PQ
 message can take seconds to tens of seconds of airtime, and duty-cycle limits
 (e.g. 1% in parts of the EU 868 MHz band) cap how often you can send. Announce
 sparingly on radio roads.

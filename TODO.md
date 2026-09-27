@@ -107,7 +107,13 @@ Legend: [ ] todo, [~] in progress, [x] done
    (X-Wing to the peer's ratchet, signed both ways), then symmetric AEAD per
    message (tens of bytes). Gives per-session forward secrecy. Keep
    sender-authentication semantics equal to signed messages.
-4. [ ] **Announce flood control.** Transport nodes rebroadcast every announce
+4. [x] **Announce flood control.** Done (SPEC §9.0): per-road 2% airtime
+   budget from the road bitrate (RNode computes it), fewest-hops-first queue
+   with newest-per-destination and max age, 60 s per-identity rebroadcast limit,
+   cheap pre-checks before ML-DSA verification. Still to consider: ingress
+   limits (announces *received* per road per second), and stopping unchanged
+   announces from being re-flooded.
+   Original note: **Announce flood control.** Transport nodes rebroadcast every announce
    (PQ is about 7.8 KB), which can eat a LoRa duty cycle and costs an ML-DSA
    verify each (CPU DoS). Add per-road announce bandwidth caps (Reticulum uses
    about 2%), per-identity rate limits, and queueing by hop count.

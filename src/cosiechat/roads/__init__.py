@@ -13,6 +13,9 @@ log = logging.getLogger('cosiechat.road')
 class Road:
   # largest frame this road can carry in one piece; Node fragments above it
   mtu = 500
+  # bits per second, if the medium is slow enough that announces need a budget
+  # (None: treat as unlimited, e.g. UDP on a LAN)
+  bitrate: float | None = None
 
   def __init__(self, name: str | None = None, mtu: int | None = None):
     self.name = name or self.__class__.__name__

@@ -31,9 +31,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from . import cbor, cose
 from . import link as L
 from . import message as msg
-from .identity import Identity
+from .identity import Identity, address_of
 from .keys import Key
 from .packet import (
   ANNOUNCE,
@@ -80,24 +81,72 @@ class _Outgoing:
 
 
 class _Lane:
-  """A road attached to a node, plus that road's auth wrapper."""
+  """
+  A road attached to a node, plus that road's auth wrapper and announce budget.
 
-  def __init__(self, road: Road, auth: RoadAuth | None):
+  On a road with a bitrate, announces may use at most `announce_cap` of it
+  (like Reticulum's 2%): after an announce of S bytes the next waits
+  S*8 / (bitrate*cap) seconds. Waiting announces go fewest-hops first, only
+  the newest per destination is kept, and stale ones are dropped. Timing is
+  the local clock only.
+  """
+
+  def __init__(self, road: Road, auth: RoadAuth | None, cap: float, max_age: float):
     self.road = road
     self.auth = auth
+    self.cap = cap
+    self.max_age = max_age
+    self.queue: dict[bytes, tuple[int, float, Packet]] = {}  # dest -> (hops, queued at, packet)
+    self._ready_at = 0.0
+    self._wake = asyncio.Event()
 
   @property
   def max_frame(self) -> int:
     return self.road.mtu - (self.auth.overhead if self.auth else 0)
 
-  async def send(self, packet: Packet):
+  @property
+  def budgeted(self) -> bool:
+    return bool(self.road.bitrate and self.cap)
+
+  async def send(self, packet: Packet) -> int:
+    """Send now; returns the bytes put on the road."""
     frame = packet.encode()
     if len(frame) <= self.max_frame:
       frames = [frame]
     else:
       frames = fragment(frame, self.max_frame - FRAGMENT_OVERHEAD)
+    total = 0
     for f in frames:
-      await self.road.send(self.auth.wrap(f) if self.auth else f)
+      wire = self.auth.wrap(f) if self.auth else f
+      total += len(wire)
+      await self.road.send(wire)
+    return total
+
+  async def announce(self, packet: Packet):
+    if not self.budgeted:
+      await self.send(packet)
+      return
+    self.queue[packet.dest] = (packet.hops, time.monotonic(), packet)
+    self._wake.set()
+
+  async def run_announces(self):
+    while True:
+      if not self.queue:
+        self._wake.clear()
+        await self._wake.wait()
+        continue
+      delay = self._ready_at - time.monotonic()
+      if delay > 0:
+        await asyncio.sleep(delay)
+      now = time.monotonic()
+      for dest in [d for d, (_, t, _) in self.queue.items() if now - t > self.max_age]:
+        del self.queue[dest]
+      if not self.queue:
+        continue
+      dest = min(self.queue, key=lambda d: self.queue[d][:2])
+      _, _, packet = self.queue.pop(dest)
+      size = await self.send(packet)
+      self._ready_at = time.monotonic() + size * 8 / (self.road.bitrate * self.cap)
 
 
 class Node:
@@ -117,6 +166,9 @@ class Node:
     retry_max: float = 600.0,
     max_attempts: int = 4,
     accept_links: bool = True,
+    announce_cap: float = 0.02,
+    announce_queue_age: float = 3600.0,
+    rebroadcast_min_interval: float = 60.0,
     name: str | None = None,
   ):
     self.identity = identity or Identity.generate()
@@ -128,6 +180,13 @@ class Node:
     self.max_hops = max_hops
     self.rebroadcast_delay = rebroadcast_delay
     self.announce_interval = announce_interval
+    # announce flood control (local policy, local clock): the share of a slow
+    # road's bitrate announces may use, how long one may wait in a queue, and
+    # how often a transport node rebroadcasts any one identity
+    self.announce_cap = announce_cap
+    self.announce_queue_age = announce_queue_age
+    self.rebroadcast_min_interval = rebroadcast_min_interval
+    self._rebroadcast_at: dict[bytes, float] = {}
     # On by default: refuse peers whose keys a quantum attacker could break
     # (ignore their announces, refuse to send to them, drop what they send).
     # Pre-quantum peers need an explicit quantum_safe_only=False.
@@ -191,17 +250,19 @@ class Node:
   # --- lifecycle ---
 
   def add_road(self, road: Road, auth: RoadAuth | None = None) -> Road:
-    lane = _Lane(road, auth)
+    lane = _Lane(road, auth, self.announce_cap, self.announce_queue_age)
     road.on_frame = lambda frame, lane=lane: self._on_frame(lane, frame)
     self.lanes.append(lane)
     if self._running:
       self._spawn(road.start())
+      self._spawn(lane.run_announces())
     return road
 
   async def start(self):
     self._running = True
     for lane in self.lanes:
       await lane.road.start()
+      self._spawn(lane.run_announces())
     if self.announce_interval:
       self._spawn(self._announce_loop())
 
@@ -259,6 +320,11 @@ class Node:
     p = Packet(ANNOUNCE, 0, self.address, None, data)
     self._mark_seen(p.hash)
     await self._broadcast(p)
+
+  async def _broadcast_announce(self, p: Packet):
+    for lane in self.lanes:
+      if lane.road.online:
+        await lane.announce(p)
 
   def peer_ratchet(self, address: bytes) -> Key | None:
     """The ratchet in the newest announce we accepted from `address`."""
@@ -473,6 +539,9 @@ class Node:
       log.error('%s: task failed', self, exc_info=t.exception())
 
   async def _broadcast(self, p: Packet, exclude: _Lane | None = None):
+    if p.type == ANNOUNCE:
+      await self._broadcast_announce(p)
+      return
     for lane in self.lanes:
       if lane is not exclude and lane.road.online:
         await lane.send(p)
@@ -532,7 +601,22 @@ class Node:
     elif item.type == PATH_REQUEST:
       self._handle_path_request(lane, item)
 
+  def _precheck_announce(self, p: Packet) -> bool:
+    """Cheap checks before the (costly) signature verification."""
+    try:
+      pub = cbor.loads(cose.decode(p.payload).content)[msg.A_IDENTITY]
+      if address_of(pub) != p.dest:
+        return False
+      known = self.identities.get(p.dest)
+      if known is not None and known.public_bytes != pub:
+        return False
+      return not self.quantum_safe_only or Identity.from_bytes(pub).quantum_safe
+    except Exception:
+      return False
+
   def _handle_announce(self, lane: _Lane, p: Packet):
+    if p.dest == self.address or not self._precheck_announce(p):
+      return
     try:
       ann = msg.verify_announce(p.payload, p.dest)
     except Exception as e:  # anything malformed from the network is just dropped
@@ -568,8 +652,13 @@ class Node:
       self._call(cb, ann, path)
 
     if self.transport and p.hops + 1 < self.max_hops:
-      fwd = Packet(ANNOUNCE, p.hops + 1, p.dest, self.address, p.payload)
-      self._spawn(self._delayed(self._broadcast, fwd))
+      now = time.monotonic()
+      if now >= self._rebroadcast_at.get(p.dest, 0.0):
+        self._rebroadcast_at[p.dest] = now + self.rebroadcast_min_interval
+        fwd = Packet(ANNOUNCE, p.hops + 1, p.dest, self.address, p.payload)
+        self._spawn(self._delayed(self._broadcast, fwd))
+      else:
+        log.debug('%s: not rebroadcasting %s again so soon', self, p.dest.hex())
 
     for kind, payload in self.pending.pop(p.dest, []):
       self._spawn(path.lane.send(Packet(kind, 0, p.dest, path.via, payload)))
@@ -619,7 +708,7 @@ class Node:
     path = self.paths.get(p.dest)
     if cached and path:
       resp = Packet(ANNOUNCE, path.hops, p.dest, self.address, cached[0])
-      self._spawn(self._delayed(lane.send, resp))
+      self._spawn(self._delayed(lane.announce, resp))
     elif p.hops + 1 < self.max_hops:
       fwd = Packet(PATH_REQUEST, p.hops + 1, p.dest, None, p.payload)
       self._spawn(self._delayed(self._broadcast, fwd))

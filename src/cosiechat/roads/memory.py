@@ -13,13 +13,14 @@ class MemoryHub:
     self.roads: list[MemoryRoad] = []
     self.frames = 0
 
-  def road(self, name: str | None = None, mtu: int = 500) -> 'MemoryRoad':
-    return MemoryRoad(self, name, mtu)
+  def road(self, name: str | None = None, mtu: int = 500, bitrate=None) -> 'MemoryRoad':
+    return MemoryRoad(self, name, mtu, bitrate)
 
 
 class MemoryRoad(Road):
-  def __init__(self, hub: MemoryHub, name: str | None = None, mtu: int = 500):
+  def __init__(self, hub: MemoryHub, name: str | None = None, mtu: int = 500, bitrate=None):
     super().__init__(name, mtu)
+    self.bitrate = bitrate
     self.hub = hub
     hub.roads.append(self)
 

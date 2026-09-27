@@ -98,6 +98,8 @@ class RNodeRoad(Road):
       'sf': sf,
       'cr': cr,
     }
+    # LoRa air bitrate (same formula as Reticulum), for the announce budget
+    self.bitrate = sf * ((4.0 / cr) / (2**sf / (bandwidth / 1000))) * 1000
     self.st_alock = st_alock
     self.lt_alock = lt_alock
     self.flow_control = flow_control

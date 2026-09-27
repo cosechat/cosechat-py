@@ -403,6 +403,28 @@ too) and a path table `dest → (road, via, hops, announce time)`.
   (`hops = path.hops`, `via = own address`); without one it rebroadcasts the
   request with `hops + 1`.
 
+### 9.0 Announce flood control
+
+Announces are big (a PQ announce is ~7.8 KB) and flood the mesh, so nodes
+MUST limit them on slow roads. The reference, following Reticulum:
+
+* **Airtime budget.** On a road with a known bitrate, announces (own,
+  rebroadcast and path responses) may use at most 2% of it: after sending an
+  announce of S bytes, the next waits `S * 8 / (bitrate * 0.02)` seconds.
+  Roads without a bitrate (UDP, WebSocket) are not budgeted.
+* **Queue.** Waiting announces go out fewest-hops first. Only the newest
+  announce per destination is kept, and one that waited over an hour is dropped.
+* **Per-identity limit.** A transport node rebroadcasts any one identity at
+  most once a minute.
+* **Cheap checks first.** Before verifying an announce's signature, drop it
+  if the keyset does not hash to `dest`, if `dest` is pinned to another
+  keyset, or (by default) if the identity is not quantum-safe.
+
+All of this runs on the node's own clock and is local policy: nodes MAY use
+other numbers. The RNode bitrate is `sf * ((4 / cr) / (2^sf / (bw / 1000))) * 1000`.
+At SF8/125 kHz that is 3125 bit/s, so a LoRa channel carries one PQ announce
+about every 17 minutes within budget (every 10 minutes at SF7, 3 hours at SF12).
+
 ### 9.1 Delivery receipts and retransmission
 
 A sender that wants confirmation puts a fresh random 16-byte **receipt
