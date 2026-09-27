@@ -18,10 +18,10 @@ from cosiechat.roads.memory import MemoryHub
 
 def handshake():
   a, b = Identity.generate(), Identity.generate()
-  rb = MemoryRatchets(b.kem_key.alg)
+  rb = MemoryRatchets(b.kem_alg)
   pending = L.make_request(a, b.public(), rb.current().public())
   book = {a.address: a.public()}.get
-  peer, accept, kb = L.accept_request(b, pending.request, book, ratchets=rb, require_ratchet=True)
+  peer, accept, kb = L.accept_request(b, pending.request, book, ratchets=rb)
   assert peer.address == a.address
   return a, b, rb, pending, accept, L.finish(pending, accept), kb
 
@@ -58,7 +58,7 @@ def test_tampered_link_message_rejected():
 def test_request_only_opens_for_its_peer():
   a, b = Identity.generate(), Identity.generate()
   c = Identity.generate()
-  rb = MemoryRatchets(b.kem_key.alg)
+  rb = MemoryRatchets(b.kem_alg)
   pending = L.make_request(a, b.public(), rb.current().public())
   with pytest.raises(CoseError):
     L.accept_request(c, pending.request, {a.address: a.public()}.get)
@@ -66,7 +66,7 @@ def test_request_only_opens_for_its_peer():
 
 def test_request_from_unknown_identity_rejected():
   a, b = Identity.generate(), Identity.generate()
-  rb = MemoryRatchets(b.kem_key.alg)
+  rb = MemoryRatchets(b.kem_alg)
   pending = L.make_request(a, b.public(), rb.current().public())
   with pytest.raises(CoseError, match='unknown'):
     L.accept_request(b, pending.request, {}.get, ratchets=rb)
@@ -86,7 +86,7 @@ def test_forward_secrecy_against_full_compromise_of_b():
   # the thief can reopen the request with b's ratchet and learn part_a...
   L.accept_request(b, pending.request, {a.address: a.public()}.get, ratchets=rb)
   # ...but part_b was sealed to a's ephemeral key, which no longer exists anywhere
-  for k in [b.kem_key, *rb.keys()]:
+  for k in rb.keys():
     with pytest.raises(CoseError):
       cose.decrypt0(accept[L.LINK_ID_SIZE :], k)
 

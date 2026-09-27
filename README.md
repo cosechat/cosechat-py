@@ -19,9 +19,13 @@ and runnable examples (including a UDP echo bot) are in [examples/](examples/).
   They see only the destination address.
 * The **sender** is in the signed protected header, inside the encryption.
   Routers see neither the sender nor the full recipient list.
-* **Forward secrecy by default.** Messages are sealed to post-quantum ratchet
-  keys that each node announces (like Reticulum's ratchets, but X-Wing and on
-  by default). Opt out with `forward_secrecy=False`.
+* **Identities only sign; messages go to ratchets.** An identity is its
+  signing keys. Each node announces a post-quantum ratchet key (X-Wing) that
+  messages are sealed to; rotating it gives forward secrecy (like Reticulum's
+  ratchets, but required).
+* **Small announces.** Full announces on first contact, short ones after (no
+  keyset), and 69-byte hash-chain keepalives in between. Sizes: SPEC §14, or
+  `cosiechat sizes`.
 * **Storage is yours.** The library does no file I/O and trusts no dates: how
   keys are stored, encrypted at rest, rotated and deleted is the application's
   call. [examples/storage.py](examples/storage.py) shows a suggested practice.
@@ -59,9 +63,10 @@ in the library stores keys or expires them by time.
 
 ```sh
 uv sync --all-extras
-uv run pytest                      # 174 tests, no hardware needed
+uv run pytest                      # no hardware needed
 uv run cosiechat keygen -o me.key  # dev tool: new identity (plain keyset)
 uv run cosiechat info me.key
+uv run cosiechat sizes             # measured wire sizes
 uv run examples/chat.py --name alice --udp 4242
 uv run examples/chat.py --lock --udp 4242           # passphrase-encrypt keys at rest
 uv run examples/chat.py --ws-server 4243 --transport  # a hub for browsers
@@ -94,13 +99,12 @@ from cosiechat import Identity, message
 from cosiechat.ratchet import MemoryRatchets
 
 alice, bob = Identity.generate(), Identity.generate()
-bobs_ratchets = MemoryRatchets(bob.kem_key.alg)        # bob announces .current()
-announce = message.make_announce(bob, ratchet=bobs_ratchets.current())
+bobs_ratchets = MemoryRatchets(bob.kem_alg)            # bob announces .current()
+announce = message.make_announce(bob, bobs_ratchets.current())
 ratchet = message.verify_announce(announce, bob.address).ratchet
 
 sealed, sent = message.seal(alice, [bob.public()], 'hi bob', ratchets={bob.address: ratchet})
-got = message.unseal(bob, sealed, {alice.address: alice.public()}.get,
-                     ratchets=bobs_ratchets, require_ratchet=True)
+got = message.unseal(bob, sealed, {alice.address: alice.public()}.get, ratchets=bobs_ratchets)
 ```
 
 ## Testing other implementations

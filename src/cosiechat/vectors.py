@@ -131,7 +131,7 @@ def generate() -> dict:
     alice, bob, carol = (Identity.generate(suite) for _ in range(3))
     ratchets = {}
     for who, i in (('alice', alice), ('bob', bob), ('carol', carol)):
-      rk = new_ratchet(i.kem_key.alg)
+      rk = new_ratchet(i.kem_alg)
       ratchets[who] = rk
       out['identities'].append(
         {
@@ -183,31 +183,43 @@ def generate() -> dict:
     # bob answers with this 16-byte tag (in a RECEIPT packet, plus an 8-byte nonce)
     v['expect']['receipt_tags'] = {'bob': _hex(M.receipt_tag(secret, bob.address))}
     out['messages'].append(v)
-    # forward_secrecy=False: sealed to the long-term identity key
-    sealed, m = M.seal(alice, [bob.public()], 'long-term key', timestamp=1700000000001)
-    out['messages'].append(message('Encrypt0', ['bob'], sealed, m, False))
     # extra: one shared COSE_Encrypt for two recipients
     sealed, m = M.seal(
       alice, [bob.public(), carol.public()], 'hi all', timestamp=1700000000002, ratchets=rks
     )
     out['messages'].append(message('Encrypt', ['bob', 'carol'], sealed, m, True))
 
-    ann = M.make_announce(
-      alice, {'name': 'alice'}, sequence=1700000000003, ratchet=ratchets['alice']
-    )
-    out['announces'].append(
-      {
-        'suite': suite,
-        'from': 'alice',
-        'data': _hex(ann),
-        'expect': {
-          'address': _hex(alice.address),
-          'sequence': 1700000000003,
-          'app_data_cbor': _hex(cbor.dumps({'name': 'alice'})),
-          'ratchet_id': _hex(ratchets['alice'].kid),
-        },
-      }
-    )
+    chain = M.HashChain(16, seed=bytes(range(32)))
+    for full in (True, False):
+      ann = M.make_announce(
+        alice,
+        ratchets['alice'],
+        {'name': 'alice'},
+        sequence=1700000000003,
+        chain=chain,
+        full=full,
+      )
+      out['announces'].append(
+        {
+          'suite': suite,
+          'from': 'alice',
+          'full': full,  # a short one is verified with the keyset from `identities`
+          'data': _hex(ann),
+          'expect': {
+            'address': _hex(alice.address),
+            'sequence': 1700000000003,
+            'app_data_cbor': _hex(cbor.dumps({'name': 'alice'})),
+            'ratchet_id': _hex(ratchets['alice'].kid),
+            'chain_anchor': _hex(chain.anchor),
+            'chain_length': chain.length,
+          },
+          # keepalive values that must check out against the anchor, in order
+          'keepalives': [
+            {'index': i, 'payload': _hex(M.keepalive_payload(1700000000003, i, chain.value(i)))}
+            for i in (1, 2, 5)
+          ],
+        }
+      )
     pkt = P.Packet(P.ANNOUNCE, 0, alice.address, None, ann)
     out['packets'].append(
       {'suite': suite, 'data': _hex(pkt.encode()), 'hash': _hex(pkt.hash), 'type': 'ANNOUNCE'}
@@ -216,7 +228,7 @@ def generate() -> dict:
   out['links'] = []
   for suite in ('pq', 'prequantum'):
     a, b = Identity.generate(suite), Identity.generate(suite)
-    rb = new_ratchet(b.kem_key.alg)
+    rb = new_ratchet(b.kem_alg)
     pending = L.make_request(a, b.public(), rb.public())
     eph = pending.ephemeral
     _, accept, kb = L.accept_request(
@@ -278,13 +290,13 @@ def _rejects() -> list[dict]:
   """Cases every implementation MUST refuse. Each names the rule it tests."""
   out = []
   alice, bob, carol, mallory = (Identity.generate('prequantum') for _ in range(4))
-  rb = new_ratchet(bob.kem_key.alg)
+  rb, rc = new_ratchet(bob.kem_alg), new_ratchet(carol.kem_alg)
   rks = {bob.address: rb.public()}
 
   def ident(i):
     return _hex(i.to_bytes())
 
-  def message(name, rule, data, me=bob, known=(alice,), ratchets=(rb,), require=True, qso=False):
+  def message(name, rule, data, me=bob, known=(alice,), ratchets=(rb,), qso=False):
     out.append(
       {
         'kind': 'message',
@@ -293,7 +305,6 @@ def _rejects() -> list[dict]:
         'me': ident(me),
         'ratchets': [_key(r) for r in ratchets],
         'known': [_hex(k.public_bytes) for k in known],
-        'require_ratchet': require,
         'quantum_safe_only': qso,
         'data': _hex(data),
       }
@@ -305,14 +316,17 @@ def _rejects() -> list[dict]:
   message(
     'forwarded to a third party',
     'reject unless our address is in the signed `to`',
-    cose.encrypt0(signed, carol.public().kem_key),
+    M.envelope(signed, rc.public()),
     me=carol,
-    ratchets=(),
-    require=False,
+    ratchets=(rc,),
   )
   message('unknown sender', 'sender keyset must be known or attached', good, known=())
-  lt, _ = M.seal(alice, [bob.public()], 'long-term')
-  message('sealed to long-term key', 'drop when ratchets are required', lt)
+  message(
+    'sealed to a ratchet we do not hold',
+    'the kid must name one of our ratchets',
+    good,
+    ratchets=(new_ratchet(bob.kem_alg),),
+  )
   body = cbor.dumps({M.M_TO: [bob.address], M.M_TIME: 1, M.M_CONTENT: 'x'})
   forged = cose.sign1(
     body,
@@ -324,7 +338,7 @@ def _rejects() -> list[dict]:
   message(
     'signature kid names someone else',
     'the signature must verify with the kid identity keys',
-    M.envelope(forged, bob.public(), rb.public()),
+    M.envelope(forged, rb.public()),
   )
   message(
     'pre-quantum sender under the default policy',
@@ -333,7 +347,7 @@ def _rejects() -> list[dict]:
     qso=True,
   )
 
-  def announce(name, rule, data, address, previous=None):
+  def announce(name, rule, data, address, previous=None, known=None):
     out.append(
       {
         'kind': 'announce',
@@ -341,30 +355,67 @@ def _rejects() -> list[dict]:
         'rule': rule,
         'address': _hex(address),
         'previous': _hex(previous) if previous else None,
+        'known': _hex(known.public_bytes) if known else None,
         'data': _hex(data),
       }
     )
 
-  ann = M.make_announce(alice, sequence=10)
+  ra = new_ratchet(alice.kem_alg)
+  ann = M.make_announce(alice, ra, sequence=10)
   announce('tampered', 'signature must verify', _flip(ann), alice.address)
   announce('for another address', 'keyset must hash to dest', ann, bob.address)
   announce(
     'older sequence', 'ignore a lower sequence than the last accepted',
-    M.make_announce(alice, sequence=9), alice.address, previous=ann,
+    M.make_announce(alice, ra, sequence=9), alice.address, previous=ann,
   )  # fmt: skip
-  wrong_kem = new_ratchet(K.HPKE_4)
-  bad_kid = new_ratchet(alice.kem_key.alg)
-  bad_kid.kid = b'\x00' * 8
-  private = new_ratchet(alice.kem_key.alg)
+  short = M.make_announce(alice, ra, sequence=11, full=False)
+  announce(
+    'short announce checked against another keyset',
+    'a short announce verifies only with the keyset that hashes to its address',
+    short, alice.address, known=mallory,
+  )  # fmt: skip
+  announce('short announce, keyset unknown', 'fetch the keyset first', short, alice.address)
+  wrong_kid = new_ratchet(alice.kem_alg)
+  wrong_kid.kid = b'\x00' * 8
+  not_kem = K.Key.generate(K.ED25519)
+  not_kem.kid = new_ratchet(alice.kem_alg).kid
   for name, rk, as_private in (
-    ('ratchet with another KEM', wrong_kem, False),
-    ('ratchet with a wrong kid', bad_kid, False),
-    ('ratchet carrying its private key', private, True),
+    ('ratchet with a wrong kid', wrong_kid, False),
+    ('ratchet that is not a KEM key', not_kem, False),
+    ('ratchet carrying its private key', new_ratchet(alice.kem_alg), True),
   ):
-    b = {M.A_IDENTITY: alice.public_bytes, M.A_SEQUENCE: 11, M.A_NONCE: b'\x00' * 8}
+    b = {M.A_IDENTITY: alice.public_bytes, M.A_SEQUENCE: 12, M.A_NONCE: b'\x00' * 8}
     b[M.A_RATCHET] = rk.to_cose(private=as_private)
-    announce(name, 'announced ratchets must match the identity KEM, carry their id, be public',
+    announce(name, 'an announced ratchet is a public HPKE key carrying its own id',
              alice.sign(cbor.dumps(b)), alice.address)  # fmt: skip
+  no_ratchet = {M.A_IDENTITY: alice.public_bytes, M.A_SEQUENCE: 13, M.A_NONCE: b'\x00' * 8}
+  announce(
+    'announce without a ratchet',
+    'an announce must carry a ratchet',
+    alice.sign(cbor.dumps(no_ratchet)),
+    alice.address,
+  )
+
+  chain = M.HashChain(16)
+  chain_ann = M.make_announce(alice, ra, sequence=20, chain=chain)
+  for name, index, value, last in (
+    ('keepalive replay', 3, chain.value(3), 3),
+    ('keepalive with a made-up value', 4, b'\x00' * 32, 3),
+    ('keepalive past the end of its chain', 17, chain.seed, 0),
+    ('keepalive for another announce', 1, chain.value(1), 0),
+  ):
+    seq = 19 if name == 'keepalive for another announce' else 20
+    out.append(
+      {
+        'kind': 'keepalive',
+        'name': name,
+        'rule': 'a keepalive must reveal a later value of the chain anchored in the announce it names',
+        'announce': _hex(chain_ann),
+        'last_index': last,
+        'last_value': _hex(chain.value(last)),
+        'data': _hex(M.keepalive_payload(seq, index, value)),
+      }
+    )
 
   for name, frame in (
     ('future protocol version', cbor.dumps([1, P.DATA, 0, b'\x01' * 16, None, b''])),
@@ -382,9 +433,9 @@ def _rejects() -> list[dict]:
       'name': 'link request for someone else',
       'rule': 'a request must name us as the peer',
       'me': ident(carol),
-      'ratchets': [],
+      'ratchets': [_key(rc)],
       'known': [_hex(alice.public_bytes)],
-      'data': _hex(cose.encrypt0(cose.decrypt0(pending.request, rb), carol.public().kem_key)),
+      'data': _hex(M.envelope(cose.decrypt0(pending.request, rb), rc.public())),
     }
   )
   other = L.make_request(alice, bob.public(), rb.public())
@@ -464,7 +515,6 @@ def check(vectors: dict) -> list[str]:
           bytes.fromhex(v['data']),
           {sender.address: sender}.get,
           ratchets=rks[(v['suite'], who)],
-          require_ratchet=v.get('ratchet', False),
         )
         e = v['expect']
         tags = e.get('receipt_tags', {})
@@ -475,7 +525,7 @@ def check(vectors: dict) -> list[str]:
             what + ' receipt tag',
           )
         expect(
-          (m.ratchet_id is not None) == v.get('ratchet', False)
+          m.ratchet_id is not None
           and m.id.hex() == e['id']
           and m.sender.hex() == e['sender']
           and [r.hex() for r in m.recipients] == e['recipients']
@@ -488,16 +538,28 @@ def check(vectors: dict) -> list[str]:
       except Exception as e:
         fails.append(f'{what}: {e!r}')
 
+  ids_by_addr = {i.address: i.public() for i in ids.values()}
   for n, v in enumerate(vectors.get('announces', [])):
     what = f'announce[{n}] {v["suite"]}'
     try:
-      a = M.verify_announce(bytes.fromhex(v['data']), bytes.fromhex(v['expect']['address']))
+      e = v['expect']
+      a = M.verify_announce(bytes.fromhex(v['data']), bytes.fromhex(e['address']), ids_by_addr.get)
       expect(
-        a.sequence == v['expect']['sequence']
-        and (a.ratchet.kid.hex() if a.ratchet else None) == v['expect'].get('ratchet_id')
-        and cbor.dumps(a.app_data) == bytes.fromhex(v['expect']['app_data_cbor']),
+        a.sequence == e['sequence']
+        and a.full == v.get('full', True)
+        and a.ratchet.kid.hex() == e['ratchet_id']
+        and cbor.dumps(a.app_data) == bytes.fromhex(e['app_data_cbor'])
+        and a.chain == (bytes.fromhex(e['chain_anchor']), e['chain_length']),
         what,
       )
+      last_index, last_value = 0, a.chain[0]
+      for ka in v.get('keepalives', []):
+        seq, index, value = M.parse_keepalive(bytes.fromhex(ka['payload']))
+        ok = seq == a.sequence and M.check_keepalive(
+          last_index, last_value, index, value, a.chain[1]
+        )
+        expect(ok and index == ka['index'], f'{what} keepalive {ka["index"]}')
+        last_index, last_value = index, value
     except Exception as e:
       fails.append(f'{what}: {e!r}')
 
@@ -570,15 +632,25 @@ def _accepted(v: dict) -> bool:
       if kind == 'link_request':
         L.read_request(me, data, book, ratchets, quantum_safe_only=False)
         return True
-      m = M.unseal(me, data, book, ratchets=ratchets, require_ratchet=v['require_ratchet'])
+      m = M.unseal(me, data, book, ratchets=ratchets)
       sender = book(m.sender) or M.attached_identity(m.signed)
       return not (v['quantum_safe_only'] and not sender.quantum_safe)
     if kind == 'announce':
-      a = M.verify_announce(data, bytes.fromhex(v['address']))
+      known = Identity.from_bytes(bytes.fromhex(v['known'])) if v.get('known') else None
+      a = M.verify_announce(data, bytes.fromhex(v['address']), lambda addr: known)
       if v['previous']:
         prev = M.verify_announce(bytes.fromhex(v['previous']), bytes.fromhex(v['address']))
         return a.sequence >= prev.sequence
       return True
+    if kind == 'keepalive':
+      ann = M.verify_announce(bytes.fromhex(v['announce']))
+      seq, index, value = M.parse_keepalive(data)
+      if seq != ann.sequence:
+        return False
+      last_value = bytes.fromhex(v['last_value'])
+      if v['last_index'] == 0 and last_value != ann.chain[0]:
+        return False
+      return M.check_keepalive(v['last_index'], last_value, index, value, ann.chain[1])
     if kind == 'packet':
       P.decode(data)
       return True

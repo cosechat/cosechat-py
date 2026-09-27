@@ -5,6 +5,7 @@ cosiechat developer tool.
   cosiechat info FILE                                        describe an identity
   cosiechat vectors [-o FILE]                                write interop test vectors
   cosiechat check FILE                                       verify vectors from any implementation
+  cosiechat sizes                                            measured wire sizes (Markdown)
 
 Running a node, and how its keys are stored, is up to the application: see
 examples/chat.py and examples/storage.py.
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from . import cbor
 from .identity import SUITES, Identity
+from .keys import get_alg
 
 
 def cmd_keygen(a):
@@ -46,7 +48,7 @@ def cmd_info(a):
   print(f'address       {ident.address.hex()}')
   for k in ident.sign_keys:
     print(f'sign          {k.algorithm.name} ({len(k.pub)} byte public key)')
-  print(f'kem           {ident.kem_key.algorithm.name} ({len(ident.kem_key.pub)} byte public key)')
+  print(f'ratchet KEM   {get_alg(ident.kem_alg).name} (announced, not part of the keyset)')
   print(f'keyset        {len(ident.public_bytes)} bytes public')
   print(f'private       {"yes" if ident.has_private else "no"}')
   print(f'quantum-safe  {"yes" if ident.quantum_safe else "no"}')
@@ -93,6 +95,9 @@ def main(argv=None):
   s = sub.add_parser('check', help='verify a test vector file')
   s.add_argument('file')
   s.set_defaults(fn=cmd_check)
+
+  s = sub.add_parser('sizes', help='print measured wire sizes')
+  s.set_defaults(fn=lambda a: print(__import__('cosiechat.sizes', fromlist=['table']).table()))
 
   a = p.parse_args(argv)
   a.fn(a)

@@ -34,12 +34,15 @@ from typing import Any
 from . import cbor, cose
 from . import link as L
 from . import message as msg
-from .identity import Identity, address_of
-from .keys import Key
+from .identity import Identity, address_of, signer_of
+from .keys import QUANTUM_SAFE_KEM, Key
 from .packet import (
   ANNOUNCE,
   DATA,
   FRAGMENT_OVERHEAD,
+  KEEPALIVE,
+  KEYSET,
+  KEYSET_REQUEST,
   LINK_ACCEPT,
   LINK_DATA,
   LINK_REQUEST,
@@ -160,12 +163,12 @@ class Node:
     rebroadcast_delay: float = 0.25,
     announce_interval: float | None = None,
     quantum_safe_only: bool = True,
-    forward_secrecy: bool = True,
     ratchets: Ratchets | None = None,
     retry_after: float = 30.0,
     retry_max: float = 600.0,
     max_attempts: int = 4,
     accept_links: bool = True,
+    keepalive_chain: int = msg.CHAIN_LENGTH,
     announce_cap: float = 0.02,
     announce_queue_age: float = 3600.0,
     rebroadcast_min_interval: float = 60.0,
@@ -196,17 +199,21 @@ class Node:
         'identity is not quantum-safe; use the pq or hybrid suite, '
         'or pass quantum_safe_only=False to accept pre-quantum crypto'
       )
-    # On by default too: we announce a ratchet, only accept messages sealed to
-    # one of our ratchets, and only send to peers' announced ratchets.
-    # forward_secrecy=False falls back to long-term keys.
-    # `ratchets` is where our ratchet keys live (see ratchet.py). The default
-    # keeps them in memory only; when to rotate or discard them is the
-    # application's storage policy (rotate_ratchet(), examples/storage.py).
-    self.forward_secrecy = forward_secrecy
-    if forward_secrecy and ratchets is None:
-      ratchets = MemoryRatchets(self.identity.kem_key.alg)
-    self.ratchets = ratchets
+    # Messages are always sealed to ratchets (identities have no KEM key).
+    # `ratchets` is where ours live (see ratchet.py). The default keeps them in
+    # memory only; when to rotate or discard them is the application's storage
+    # policy (rotate_ratchet(), examples/storage.py). Never rotating = no
+    # forward secrecy beyond restarts.
+    self.ratchets = ratchets if ratchets is not None else MemoryRatchets(self.identity.kem_alg)
     self.peer_ratchets: dict[bytes, Key] = {}
+    # keepalives: our current hash chain, and the last value accepted per peer
+    self._chain: msg.HashChain | None = None
+    self._peer_chains: dict[bytes, list] = {}  # addr -> [sequence, length, index, value]
+    # short announces waiting for a keyset, and keyset requests we forwarded
+    self._need_keyset: dict[bytes, tuple[_Lane, Packet]] = {}
+    self._keyset_asked: dict[bytes, set] = {}
+    self._keyset_requested_at: dict[bytes, float] = {}
+    self._announced = False
     self._sequence = 0  # our announce sequence: Unix ms, but never going backwards
     # delivery: resend after retry_after, doubling up to retry_max, max_attempts
     # sends in all (timed by the local event loop clock only)
@@ -218,6 +225,7 @@ class Node:
     self._delivered: OrderedDict[bytes, None] = OrderedDict()  # message ids we handed over
     # links (sessions, see link.py): live in memory only, closed explicitly
     self.accept_links = accept_links
+    self.keepalive_chain = keepalive_chain
     self.links: dict[bytes, L.LinkKeys] = {}  # link id -> keys
     self._link_to: dict[bytes, bytes] = {}  # peer address -> link id
     self._pending_links: dict[bytes, tuple[L.PendingLink, asyncio.Future]] = {}
@@ -309,17 +317,43 @@ class Node:
   def known(self, address: bytes) -> Identity | None:
     return self.identities.get(address)
 
-  async def announce(self, app_data: Any = None):
+  async def announce(self, app_data: Any = None, full: bool | None = None):
+    """
+    Signed announce with our current ratchet and a fresh keepalive chain.
+    full: include our keyset. Default: only the first time since start (and
+    when answering a path request for us); later announces are short.
+    """
+    if full is None:
+      full = not self._announced
+    self._announced = True
     self._sequence = max(msg.now_ms(), self._sequence + 1)
+    self._chain = msg.HashChain(self.keepalive_chain)
     data = msg.make_announce(
       self.identity,
+      self.ratchets.current(),
       app_data if app_data is not None else self.app_data,
       sequence=self._sequence,
-      ratchet=self.ratchets.current() if self.ratchets is not None else None,
+      chain=self._chain,
+      full=full,
     )
     p = Packet(ANNOUNCE, 0, self.address, None, data)
     self._mark_seen(p.hash)
     await self._broadcast(p)
+
+  async def keepalive(self):
+    """
+    "Still here, same keys": ~70 bytes instead of a signed announce. Falls
+    back to a (short) signed announce when there is no chain or it is used up.
+    """
+    step = self._chain.next() if self._chain else None
+    if step is None:
+      await self.announce()
+      return
+    p = Packet(KEEPALIVE, 0, self.address, None, msg.keepalive_payload(self._sequence, *step))
+    self._mark_seen(p.hash)
+    for lane in self.lanes:
+      if lane.road.online:
+        await lane.send(p)
 
   async def _broadcast_announce(self, p: Packet):
     for lane in self.lanes:
@@ -332,8 +366,6 @@ class Node:
 
   async def rotate_ratchet(self, announce: bool = True) -> Key:
     """Start using a new ratchet (the provider decides what happens to old ones)."""
-    if self.ratchets is None:
-      raise ValueError('forward secrecy is off; there are no ratchets')
     k = self.ratchets.rotate()
     if announce:
       await self.announce()
@@ -394,7 +426,7 @@ class Node:
       # every (re)send is a fresh envelope around the same signed message: a new
       # packet hash gets past duplicate filters, and the newest ratchet is used
       def reseal(r=r):
-        return msg.envelope(m.signed, r, self.peer_ratchet(r.address)), DATA
+        return msg.envelope(m.signed, self.peer_ratchet(r.address)), DATA
 
       await self._dispatch(m, r.address, reseal, receipt)
     return m
@@ -413,14 +445,13 @@ class Node:
       raise LookupError(f'no identity known for {t.hex()}')
     if self.quantum_safe_only and not ident.quantum_safe:
       raise PermissionError(f'{t.hex()} is not quantum-safe; refusing to send')
-    if self.forward_secrecy and self.peer_ratchet(t) is None:
+    if self.peer_ratchet(t) is None:
       # no ratchet from this peer yet: ask for a fresh announce
       await self.request_path(t, timeout, fresh=True)
       if self.peer_ratchet(t) is None:
-        raise LookupError(
-          f'no current ratchet for {t.hex()}; it must announce '
-          '(or use forward_secrecy=False to send to its long-term key)'
-        )
+        raise LookupError(f'no ratchet for {t.hex()}: it must announce first')
+    if self.quantum_safe_only and self.peer_ratchet(t).alg not in QUANTUM_SAFE_KEM:
+      raise PermissionError(f'{t.hex()} announced a ratchet that is not quantum-safe')
     return ident
 
   async def _dispatch(self, m: msg.Message, addr: bytes, reseal, receipt: bool):
@@ -600,17 +631,32 @@ class Node:
       self._handle_data(lane, item)
     elif item.type == PATH_REQUEST:
       self._handle_path_request(lane, item)
+    elif item.type == KEEPALIVE:
+      self._handle_keepalive(lane, item)
+    elif item.type == KEYSET_REQUEST:
+      self._handle_keyset_request(lane, item)
+    elif item.type == KEYSET:
+      self._handle_keyset(lane, item)
 
   def _precheck_announce(self, p: Packet) -> bool:
     """Cheap checks before the (costly) signature verification."""
     try:
-      pub = cbor.loads(cose.decode(p.payload).content)[msg.A_IDENTITY]
-      if address_of(pub) != p.dest:
+      sm = cose.decode(p.payload)
+      if signer_of(sm) != p.dest:
         return False
+      body = cbor.loads(sm.content)
+      pub = body.get(msg.A_IDENTITY)
       known = self.identities.get(p.dest)
-      if known is not None and known.public_bytes != pub:
-        return False
-      return not self.quantum_safe_only or Identity.from_bytes(pub).quantum_safe
+      if pub is not None:
+        if address_of(pub) != p.dest or (known is not None and known.public_bytes != pub):
+          return False  # pinned to another keyset
+        known = Identity.from_bytes(pub)
+      if self.quantum_safe_only:
+        if known is not None and not known.quantum_safe:
+          return False
+        if body.get(msg.A_RATCHET, {}).get(3) not in QUANTUM_SAFE_KEM:
+          return False
+      return True
     except Exception:
       return False
 
@@ -618,19 +664,15 @@ class Node:
     if p.dest == self.address or not self._precheck_announce(p):
       return
     try:
-      ann = msg.verify_announce(p.payload, p.dest)
+      ann = msg.verify_announce(p.payload, p.dest, self.identities.get)
+    except msg.KeysetNeeded:
+      # a short announce from someone we have not met: fetch the keyset (from
+      # anyone; it is self-authenticating), then look at this announce again
+      self._need_keyset[p.dest] = (lane, p)
+      self._request_keyset(p.dest)
+      return
     except Exception as e:  # anything malformed from the network is just dropped
       log.debug('%s: invalid announce: %r', self, e)
-      return
-    if p.dest == self.address:
-      return
-    known = self.identities.get(p.dest)
-    if known is not None and known.public_bytes != ann.identity.public_bytes:
-      # an address is pinned to the first keyset seen for it
-      log.warning('%s: rejected announce with different keys for %s', self, p.dest.hex())
-      return
-    if self.quantum_safe_only and not ann.identity.quantum_safe:
-      log.debug('%s: ignoring non-quantum-safe announce from %s', self, p.dest.hex())
       return
     prev = self.announces.get(p.dest)
     # an identity's sequence only goes up: an older (replayed) announce must not
@@ -640,28 +682,104 @@ class Node:
       return
     self.identities[p.dest] = ann.identity
     self.announces[p.dest] = (p.payload, ann)
-    if ann.ratchet is not None:
-      self.peer_ratchets[p.dest] = ann.ratchet
-    path = Path(lane, p.via, p.hops + 1, ann.sequence, time.monotonic())
-    self.paths[p.dest] = path
-
-    for fut in self._waiters.pop(p.dest, []):
-      if not fut.done():
-        fut.set_result(ann.identity)
+    self.peer_ratchets[p.dest] = ann.ratchet
+    if ann.chain:
+      self._peer_chains[p.dest] = [ann.sequence, ann.chain[1], 0, ann.chain[0]]
+    else:
+      self._peer_chains.pop(p.dest, None)
+    path = self._update_path(lane, p, ann.sequence)
     for cb in self._announce_handlers:
       self._call(cb, ann, path)
+    self._rebroadcast(p, ANNOUNCE)
 
-    if self.transport and p.hops + 1 < self.max_hops:
-      now = time.monotonic()
-      if now >= self._rebroadcast_at.get(p.dest, 0.0):
-        self._rebroadcast_at[p.dest] = now + self.rebroadcast_min_interval
-        fwd = Packet(ANNOUNCE, p.hops + 1, p.dest, self.address, p.payload)
-        self._spawn(self._delayed(self._broadcast, fwd))
-      else:
-        log.debug('%s: not rebroadcasting %s again so soon', self, p.dest.hex())
-
+  def _update_path(self, lane: _Lane, p: Packet, sequence: int) -> Path:
+    path = Path(lane, p.via, p.hops + 1, sequence, time.monotonic())
+    self.paths[p.dest] = path
+    for fut in self._waiters.pop(p.dest, []):
+      if not fut.done():
+        fut.set_result(self.identities.get(p.dest))
     for kind, payload in self.pending.pop(p.dest, []):
       self._spawn(path.lane.send(Packet(kind, 0, p.dest, path.via, payload)))
+    return path
+
+  def _rebroadcast(self, p: Packet, kind: int):
+    """Transport nodes pass announces and keepalives on, at most once per interval per identity."""
+    if not self.transport or p.hops + 1 >= self.max_hops:
+      return
+    now = time.monotonic()
+    key = (kind, p.dest)
+    if now < self._rebroadcast_at.get(key, 0.0):
+      log.debug('%s: not rebroadcasting %s again so soon', self, p.dest.hex())
+      return
+    self._rebroadcast_at[key] = now + self.rebroadcast_min_interval
+    fwd = Packet(kind, p.hops + 1, p.dest, self.address, p.payload)
+    if kind == ANNOUNCE:
+      self._spawn(self._delayed(self._broadcast, fwd))
+    else:
+      self._spawn(self._delayed(self._send_all, fwd))
+
+  async def _send_all(self, p: Packet):
+    for lane in self.lanes:
+      if lane.road.online:
+        await lane.send(p)
+
+  def _handle_keepalive(self, lane: _Lane, p: Packet):
+    state = self._peer_chains.get(p.dest)
+    if state is None or p.dest == self.address:
+      return
+    try:
+      seq, index, value = msg.parse_keepalive(p.payload)
+    except Exception:
+      return
+    if seq != state[0] or not msg.check_keepalive(state[2], state[3], index, value, state[1]):
+      return
+    state[2], state[3] = index, value
+    self._update_path(lane, p, seq)
+    self._rebroadcast(p, KEEPALIVE)
+
+  def _request_keyset(self, address: bytes):
+    now = time.monotonic()
+    if now < self._keyset_requested_at.get(address, 0.0):
+      return
+    self._keyset_requested_at[address] = now + self.retry_after
+    p = Packet(KEYSET_REQUEST, 0, address, None, random.randbytes(8))
+    self._mark_seen(p.hash)
+    self._spawn(self._send_all(p))
+
+  def _handle_keyset_request(self, lane: _Lane, p: Packet):
+    ident = self.identities.get(p.dest)
+    if ident is not None:
+      # we are it, or we know it: the keyset proves itself by hashing to the address
+      resp = Packet(KEYSET, 0, p.dest, None, ident.public_bytes)
+      self._spawn(self._delayed(lane.send, resp))
+      return
+    if self.transport and p.hops + 1 < self.max_hops:
+      self._keyset_asked.setdefault(p.dest, set()).add(lane)
+      fwd = Packet(KEYSET_REQUEST, p.hops + 1, p.dest, None, p.payload)
+      self._spawn(self._delayed(self._send_all, fwd))
+
+  def _handle_keyset(self, lane: _Lane, p: Packet):
+    asked = self._keyset_asked.pop(p.dest, set())
+    waiting = self._need_keyset.pop(p.dest, None)
+    if not asked and waiting is None:
+      return  # nobody here asked for it
+    if address_of(p.payload) != p.dest:
+      return
+    known = self.identities.get(p.dest)
+    if known is not None and known.public_bytes != p.payload:
+      return
+    try:
+      ident = Identity.from_bytes(p.payload)
+    except Exception:
+      return
+    if self.quantum_safe_only and not ident.quantum_safe:
+      return
+    self.identities.setdefault(p.dest, ident)
+    for other in asked:
+      if other is not lane:
+        self._spawn(other.send(p))
+    if waiting is not None:
+      self._handle_announce(*waiting)
 
   def _handle_data(self, lane: _Lane, p: Packet):
     """DATA and RECEIPT: take it if it is ours, else forward like any payload."""
@@ -700,7 +818,8 @@ class Node:
 
   def _handle_path_request(self, lane: _Lane, p: Packet):
     if p.dest == self.address:
-      self._spawn(self._delayed(self.announce))
+      # whoever asks may not know us yet: include the keyset
+      self._spawn(self._delayed(self.announce, None, True))
       return
     if not self.transport:
       return
@@ -720,7 +839,6 @@ class Node:
         p.payload,
         self.identities.get,
         ratchets=self.ratchets,
-        require_ratchet=self.forward_secrecy,
       )
     except Exception as e:
       log.debug('%s: could not open message: %r', self, e)
@@ -768,7 +886,6 @@ class Node:
         p.payload,
         self.identities.get,
         ratchets=self.ratchets,
-        require_ratchet=self.forward_secrecy,
         quantum_safe_only=self.quantum_safe_only,
       )
     except Exception as e:

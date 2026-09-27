@@ -1,11 +1,12 @@
 """
-Ratchets: extra KEM keys that give forward secrecy (like Reticulum's).
+Ratchets: the KEM keys messages are sealed to (like Reticulum's ratchets).
 
-A ratchet is a fresh HPKE KEM key with the identity's KEM (X-Wing for the pq
-suite). A node announces its current ratchet inside its signed announce;
-senders seal to it instead of the long-term identity key. Once the ratchet's
-private key is gone, messages sealed to it cannot be opened by anyone, even
-with the identity's private keys.
+An identity only has signing keys. To be reachable it announces a ratchet: an
+HPKE KEM key (X-Wing for the pq suite) inside its signed announce. Senders
+seal to the newest ratchet they have for it. Once a ratchet's private key is
+gone, messages sealed to it cannot be opened by anyone, even with the
+identity's private keys: rotating ratchets gives forward secrecy, and never
+rotating one gives a long-term key.
 
 This module is mechanism only. *When* to rotate and *how long* to keep old
 ratchets is a storage policy for the application (see examples/storage.py for
@@ -22,7 +23,7 @@ A ratchet provider is anything with:
 import hashlib
 from typing import Protocol
 
-from .keys import CoseError, Key, hpke_variant
+from .keys import CoseError, HpkeAlg, Key
 
 RATCHET_ID_SIZE = 8
 
@@ -32,16 +33,16 @@ def ratchet_id(pub: bytes) -> bytes:
 
 
 def new_ratchet(alg: int) -> Key:
-  """A fresh ratchet for an identity whose KEM is `alg`; kid = ratchet id."""
+  """A fresh ratchet using KEM `alg` (e.g. Identity.kem_alg); kid = ratchet id."""
   k = Key.generate(alg)
   k.kid = ratchet_id(k.pub)
   return k
 
 
-def check_ratchet(ratchet: Key, identity_kem: Key):
-  """A ratchet must use the identity's KEM and carry its own id as kid."""
-  if hpke_variant(ratchet, True).id != hpke_variant(identity_kem, True).id:
-    raise CoseError('ratchet uses a different KEM than the identity')
+def check_ratchet(ratchet: Key):
+  """A ratchet must be an HPKE key carrying its own id as kid."""
+  if not isinstance(ratchet.algorithm, HpkeAlg):
+    raise CoseError('ratchet is not an HPKE key')
   if ratchet.kid != ratchet_id(ratchet.pub):
     raise CoseError('ratchet kid does not match its key')
 

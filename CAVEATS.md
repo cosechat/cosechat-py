@@ -25,17 +25,28 @@ Known limits of cosiechat as it stands. The wire format is in
   ratchets is the application's storage policy (`Node.rotate_ratchet()`; a
   suggested policy is in `examples/storage.py`: rotate every 30 minutes,
   delete after 10 days). Someone who steals the ratchets a node still holds
-  can read messages sealed to them. Stealing only the identity key opens nothing.
+  can read messages sealed to them. Stealing only the identity opens nothing:
+  identities are signing keys only. A ratchet that is never rotated is a
+  long-term key.
 * **Deleting a ratchet is only as good as the storage.** Removing a key from
   a file does not remove it from flash, SSDs, backups or swap. That is a
   storage concern: use full-disk encryption, secure elements, or media you
   can really erase.
-* **Forward secrecy is on by default, which has costs.** You can only message
-  a peer whose announce (with its ratchet) you have received, so first
-  contact needs an announce (a path request triggers one). A message sealed
-  to a ratchet the recipient has since deleted can no longer be opened, which
-  includes messages held too long by a store-and-forward node. Opting out
-  (`Node(forward_secrecy=False)`) goes back to long-term keys.
+* **You need someone's announce to message them.** Identities have no
+  encryption key, so knowing an address or keyset is not enough: the
+  announce carries the ratchet. First contact needs an announce (a path
+  request triggers one), and sharing a contact out of band means sharing a
+  signed announce, not just an address. A message sealed to a ratchet the
+  recipient has since deleted can no longer be opened, which includes
+  messages held too long by a store-and-forward node.
+* **Short announces need the keyset from somewhere.** A node that has never
+  seen an identity's full announce must fetch its keyset (SPEC §7.2). Any
+  node holding it can answer, but if none is reachable the short announce is
+  useless to that node until the identity sends a full one (it does on
+  start-up, and when asked with a path request).
+* **Keepalive chains live in memory.** After a restart a node sends a new
+  signed announce with a new chain, and keepalives cannot carry changes (a
+  new ratchet or app data needs a signed announce).
 * **No dates are trusted.** The library never expires or rejects anything by
   comparing a peer's timestamp with its own clock. Announce sequence numbers
   only order one identity's own announces. The price: a peer that rotates
@@ -92,21 +103,18 @@ Known limits of cosiechat as it stands. The wire format is in
 
 ## Airtime and size
 
-| suite | announce | 1-recipient message |
-|---|---:|---:|
-| `pq` (default) | ~7.8 KB (17 LoRa frames) | ~4.6 KB (10 frames) |
-| `hybrid` | ~7.9 KB | ~4.6 KB |
-| `prequantum` | ~360 B (1 frame) | ~260 B (1 frame) |
+Measured sizes for every packet kind and suite are in SPEC §14 (generated from
+the code). For the default `pq` suite: a full announce is 6,643 bytes (14 LoRa
+frames), a short one 4,676 (10), a keepalive 69, a sealed message about 4.6
+KB (10 frames), and a link message 149 bytes.
 
-Post-quantum keys and signatures are kilobytes, and announces also carry a
-~1.2 KB X-Wing ratchet. Within the 2% announce budget (SPEC §9.0), a LoRa
-channel carries one PQ announce about every 10 minutes at SF7, 17 minutes at
-SF8, and 3 hours at SF12, shared by *every* node on it. Meshes with many
-nodes on slow LoRa settings will be slow to learn paths. Links (SPEC §9.2)
-make the per-message cost small once a path is known. On slow LoRa settings a PQ
-message can take seconds to tens of seconds of airtime, and duty-cycle limits
-(e.g. 1% in parts of the EU 868 MHz band) cap how often you can send. Announce
-sparingly on radio roads.
+Within the 2% announce budget (SPEC §9.0) one LoRa channel, shared by *every*
+node on it, carries one short `pq` announce about every 6 minutes at SF7, 10
+minutes at SF8, and 1.8 hours at SF12. Keepalives cost seconds instead, so
+send signed announces only when something changes. Meshes with many nodes on
+slow LoRa settings will still be slow to learn new paths. Links (SPEC §9.2)
+make the per-message cost small once a path is known. Duty-cycle limits (e.g.
+1% in parts of the EU 868 MHz band) also cap how often you can send.
 
 ## Implementation notes
 

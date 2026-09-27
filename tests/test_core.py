@@ -10,6 +10,7 @@ from cosiechat import message as M
 from cosiechat import packet as P
 from cosiechat.identity import SUITES, Identity, address_of, signer_of
 from cosiechat.keys import CoseError, Key
+from cosiechat.ratchet import new_ratchet
 
 SIGN_ALGS = [K.ED25519, K.EDDSA, K.ESP256, K.ES256, K.ML_DSA_44, K.ML_DSA_65, K.ML_DSA_87]
 HPKE_ALGS = [
@@ -196,12 +197,23 @@ def _book(*ids):
   return known.get
 
 
+def _ratchets(*ids):
+  """A ratchet each: {address: private ratchet}."""
+  return {i.address: new_ratchet(i.kem_alg) for i in ids}
+
+
+def _pub(rs):
+  return {a: r.public() for a, r in rs.items()}
+
+
 @pytest.mark.parametrize('suite', SUITES)
 def test_seal_unseal(suite):
   a, b = Identity.generate(suite), Identity.generate(suite)
-  sealed, sent = M.seal(a, [b.public()], 'hello', title='t', fields={1: b'file'})
-  assert cose.decode(sealed).kind == 'Encrypt0'
-  got = M.unseal(b, sealed, _book(a))
+  rs = _ratchets(b)
+  sealed, sent = M.seal(a, [b.public()], 'hello', title='t', fields={1: b'file'}, ratchets=_pub(rs))
+  env = cose.decode(sealed)
+  assert env.kind == 'Encrypt0' and env.kid == rs[b.address].kid
+  got = M.unseal(b, sealed, _book(a), ratchets=[rs[b.address]])
   assert (got.sender, got.content, got.title, got.fields, got.id) == (
     a.address,
     'hello',
@@ -209,52 +221,63 @@ def test_seal_unseal(suite):
     {1: b'file'},
     sent.id,
   )
-  assert got.recipients == [b.address]
+  assert got.recipients == [b.address] and got.ratchet_id == rs[b.address].kid
+
+
+def test_sealing_needs_a_ratchet():
+  a, b = Identity.generate(), Identity.generate()
+  with pytest.raises(ValueError, match='ratchet'):
+    M.seal(a, [b.public()], 'x')
 
 
 def test_sealed_message_hides_sender():
   a, b = Identity.generate('prequantum'), Identity.generate('prequantum')
-  sealed, _ = M.seal(a, [b.public()], 'x')
+  sealed, _ = M.seal(a, [b.public()], 'x', ratchets=_pub(_ratchets(b)))
   assert a.address not in sealed
   assert a.public_bytes[-32:] not in sealed
 
 
 def test_seal_to_many():
   a = Identity.generate()
-  rs = [Identity.generate() for _ in range(3)]
-  sealed, sent = M.seal(a, [r.public() for r in rs], 'all')
+  bs = [Identity.generate() for _ in range(3)]
+  rs = _ratchets(*bs)
+  sealed, sent = M.seal(a, [b.public() for b in bs], 'all', ratchets=_pub(rs))
   assert cose.decode(sealed).kind == 'Encrypt'
-  for r in rs:
-    assert M.unseal(r, sealed, _book(a)).id == sent.id
+  for b in bs:
+    assert M.unseal(b, sealed, _book(a), ratchets=[rs[b.address]]).id == sent.id
 
 
 def test_unseal_rejects_non_recipient_and_unknown_sender():
   a, b, c = (Identity.generate('prequantum') for _ in range(3))
-  sealed, _ = M.seal(a, [b.public()], 'x')
+  rs = _ratchets(b, c)
+  sealed, _ = M.seal(a, [b.public()], 'x', ratchets=_pub(rs))
   with pytest.raises(CoseError):
-    M.unseal(c, sealed, _book(a))
+    M.unseal(c, sealed, _book(a), ratchets=[rs[c.address]])
   with pytest.raises(CoseError):
-    M.unseal(b, sealed, _book())
+    M.unseal(b, sealed, _book(), ratchets=[rs[b.address]])
 
 
 def test_forwarded_signature_is_not_addressed_to_new_recipient():
   """b decrypts a's message to b and re-encrypts it to c: c must not accept it as addressed to c."""
   a, b, c = (Identity.generate('prequantum') for _ in range(3))
-  sealed, _ = M.seal(a, [b.public()], 'for b')
-  signed = cose.decrypt0(sealed, b.kem_key)
-  resealed = cose.encrypt0(signed, c.public().kem_key)
+  rs = _ratchets(b, c)
+  sealed, _ = M.seal(a, [b.public()], 'for b', ratchets=_pub(rs))
+  signed = cose.decrypt0(sealed, rs[b.address])
+  resealed = M.envelope(signed, rs[c.address].public())
   with pytest.raises(CoseError, match='not addressed'):
-    M.unseal(c, resealed, _book(a))
+    M.unseal(c, resealed, _book(a), ratchets=[rs[c.address]])
 
 
 def test_attached_identity():
   a, b = Identity.generate(), Identity.generate()
-  sealed, _ = M.seal(a, [b.public()], 'x', attach_identity=True)
-  assert M.unseal(b, sealed, _book()).sender == a.address
+  rs = _ratchets(b)
+  sealed, _ = M.seal(a, [b.public()], 'x', attach_identity=True, ratchets=_pub(rs))
+  assert M.unseal(b, sealed, _book(), ratchets=[rs[b.address]]).sender == a.address
 
 
 def test_attached_identity_must_match_kid():
   a, b, mallory = (Identity.generate('prequantum') for _ in range(3))
+  rs = _ratchets(b)
   body = cbor.dumps({M.M_TO: [b.address], M.M_TIME: 1, M.M_CONTENT: 'x'})
   # signed by mallory, claiming to be a, with mallory's keyset attached
   forged = cose.sign1(
@@ -264,7 +287,7 @@ def test_attached_identity_must_match_kid():
     kid_protected=True,
   )
   with pytest.raises(CoseError):
-    M.unseal(b, cose.encrypt0(forged, b.public().kem_key), _book())
+    M.unseal(b, M.envelope(forged, rs[b.address].public()), _book(), ratchets=[rs[b.address]])
 
 
 # --- announces ---
@@ -273,17 +296,44 @@ def test_attached_identity_must_match_kid():
 @pytest.mark.parametrize('suite', SUITES)
 def test_announce(suite):
   i = Identity.generate(suite)
-  data = M.make_announce(i, {'name': 'alice'})
+  r = new_ratchet(i.kem_alg)
+  chain = M.HashChain(8)
+  data = M.make_announce(i, r, {'name': 'alice'}, chain=chain)
   ann = M.verify_announce(data, i.address)
-  assert ann.identity == i.public() and ann.app_data == {'name': 'alice'}
+  assert ann.identity == i.public() and ann.app_data == {'name': 'alice'} and ann.full
+  assert ann.ratchet.pub == r.pub and ann.chain == (chain.anchor, 8)
+
+
+def test_short_announce_needs_the_keyset():
+  i = Identity.generate()
+  data = M.make_announce(i, new_ratchet(i.kem_alg), full=False)
+  with pytest.raises(M.KeysetNeeded) as e:
+    M.verify_announce(data, i.address)
+  assert e.value.address == i.address
+  ann = M.verify_announce(data, i.address, {i.address: i.public()}.get)
+  assert not ann.full and ann.identity == i.public()
+  # a keyset for another address does not verify it
+  with pytest.raises(CoseError):
+    M.verify_announce(data, i.address, lambda a: Identity.generate().public())
+
+
+def test_short_announce_is_much_smaller():
+  i = Identity.generate()
+  r = new_ratchet(i.kem_alg)
+  full = M.make_announce(i, r, sequence=1)
+  short = M.make_announce(i, r, sequence=1, full=False)
+  assert len(full) - len(short) >= len(i.public_bytes)
 
 
 def test_announce_forgeries_rejected():
   real, mallory = Identity.generate('prequantum'), Identity.generate('prequantum')
+  r = new_ratchet(real.kem_alg)
   with pytest.raises(CoseError):
-    M.verify_announce(M.make_announce(mallory), real.address)
+    M.verify_announce(M.make_announce(mallory, r), real.address)
   # mallory signs a body containing real's keyset
-  body = cbor.dumps({M.A_IDENTITY: real.public_bytes, M.A_SEQUENCE: 1, M.A_NONCE: b'12345678'})
+  body = cbor.dumps(
+    {M.A_IDENTITY: real.public_bytes, M.A_SEQUENCE: 1, M.A_RATCHET: r.public().to_cose()}
+  )
   forged = cose.sign1(
     body,
     Key(
@@ -293,6 +343,45 @@ def test_announce_forgeries_rejected():
   )
   with pytest.raises(CoseError):
     M.verify_announce(forged, real.address)
+
+
+def test_announce_needs_a_ratchet():
+  i = Identity.generate('prequantum')
+  body = cbor.dumps({M.A_IDENTITY: i.public_bytes, M.A_SEQUENCE: 1})
+  with pytest.raises(CoseError, match='ratchet'):
+    M.verify_announce(i.sign(body), i.address)
+
+
+# --- keepalive chains ---
+
+
+def test_hash_chain_links_back_to_the_anchor():
+  c = M.HashChain(10)
+  last_i, last_v = 0, c.anchor
+  for _ in range(10):
+    i, v = c.next()
+    assert M.check_keepalive(last_i, last_v, i, v, 10)
+    last_i, last_v = i, v
+  assert c.next() is None
+
+
+def test_keepalive_rejects_replay_forgery_and_big_jumps():
+  c = M.HashChain(1000)
+  i1, v1 = c.next()
+  assert not M.check_keepalive(0, c.anchor, 0, c.anchor, 1000)  # replay of the anchor
+  assert not M.check_keepalive(1, v1, 1, v1, 1000)  # replay of the last one
+  assert not M.check_keepalive(1, v1, 2, b'\x00' * 32, 1000)  # made up
+  assert M.check_keepalive(0, c.anchor, 5, c.value(5), 1000)  # missed a few: fine
+  assert not M.check_keepalive(
+    0, c.anchor, M.MAX_CHAIN_SKIP + 1, c.value(M.MAX_CHAIN_SKIP + 1), 1000
+  )
+  assert not M.check_keepalive(0, c.anchor, 1001, c.seed, 1000)  # past the end
+
+
+def test_keepalive_packet_is_small():
+  c = M.HashChain()
+  p = P.Packet(P.KEEPALIVE, 0, b'\x01' * 16, None, M.keepalive_payload(1790000000000, *c.next()))
+  assert len(p.encode()) < 80
 
 
 # --- packets ---
@@ -311,7 +400,7 @@ def test_packet_roundtrip_and_hash_ignores_hops_and_via():
   [
     b'',
     b'\xff',
-    cbor.dumps([0, 9, 0, b'x' * 16, None, b'']),  # unknown type
+    cbor.dumps([0, 99, 0, b'x' * 16, None, b'']),  # unknown type
     cbor.dumps([0, 1, 0, b'short', None, b'']),  # bad address
     cbor.dumps([1, 1, 0, b'x' * 16, None, b'']),  # future protocol version
     cbor.dumps([1, 0, b'x' * 16, None, b'']),  # no version
@@ -348,16 +437,23 @@ def test_road_auth_modes():
 
 def test_seal_single_recipient_as_cose_encrypt():
   a, b = Identity.generate('prequantum'), Identity.generate('prequantum')
-  sealed, sent = M.seal(a, [b.public()], 'wolfcose friendly', integrated=False)
+  rs = _ratchets(b)
+  sealed, sent = M.seal(a, [b.public()], 'wolfcose friendly', integrated=False, ratchets=_pub(rs))
   env = cose.decode(sealed)
   assert env.kind == 'Encrypt'
   assert [layer.alg for layer, _ in env.recipients] == [K.HPKE_0_KE]
-  assert M.unseal(b, sealed, _book(a)).id == sent.id
+  assert M.unseal(b, sealed, _book(a), ratchets=[rs[b.address]]).id == sent.id
 
 
 def test_quantum_safe_suites():
   assert Identity.generate('pq').quantum_safe
   assert Identity.generate('hybrid').quantum_safe
   assert not Identity.generate('prequantum').quantum_safe
-  # a PQ KEM with only pre-quantum signatures is still forgeable by a quantum attacker
-  assert not Identity([Key.generate(K.ED25519)], Key.generate(K.HPKE_9)).quantum_safe
+  assert Identity.generate('pq').kem_alg == K.HPKE_9
+  assert Identity.generate('prequantum').kem_alg == K.HPKE_0
+
+
+def test_identity_is_signing_keys_only():
+  i = Identity.generate('pq')
+  assert len(cbor.loads(i.public_bytes)) == 1
+  assert len(i.public_bytes) < 2000

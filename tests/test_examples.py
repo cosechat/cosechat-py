@@ -96,4 +96,4 @@ def test_chat_example_starts():
   out = subprocess.run(
     [sys.executable, EXAMPLES / 'chat.py', '--help'], capture_output=True, text=True, timeout=30
   )
-  assert out.returncode == 0 and '--no-forward-secrecy' in out.stdout
+  assert out.returncode == 0 and '--lock' in out.stdout

@@ -6,7 +6,7 @@ KEM encapsulation (1.1 KB for X-Wing) every time. A link pays that once, then
 each message is a symmetric COSE_Encrypt0 with ~40 bytes of overhead.
 
   request (initiator A -> B), sealed like a message:
-    COSE_Encrypt0 to B's ratchet (or long-term key) of
+    COSE_Encrypt0 to B's ratchet of
       A.sign(CBOR {1: A's ephemeral KEM public COSE_Key, 2: part_a (32 random bytes), 3: B's address})
 
   accept (B -> A):
@@ -86,12 +86,12 @@ def _derive(link_id: bytes, part_a: bytes, part_b: bytes, peer: bytes, initiator
   return LinkKeys(link_id, peer, False, b_to_a, a_to_b)
 
 
-def make_request(me: Identity, peer: Identity, peer_ratchet: Key | None = None) -> PendingLink:
+def make_request(me: Identity, peer: Identity, peer_ratchet: Key) -> PendingLink:
   """Start a link to `peer`. Send .request as a LINK_REQUEST packet to peer.address."""
-  eph = Key.generate(me.kem_key.alg)
+  eph = Key.generate(me.kem_alg)
   part_a = os.urandom(PART_SIZE)
   body = cbor.dumps({L_EPHEMERAL: eph.public().to_cose(), L_PART: part_a, L_PEER: peer.address})
-  request = msg.envelope(me.sign(body), peer, peer_ratchet)
+  request = msg.envelope(me.sign(body), peer_ratchet)
   return PendingLink(link_id(request), peer.address, request, eph, part_a)
 
 
@@ -104,11 +104,10 @@ def read_request(
   request: bytes,
   resolve,
   ratchets=None,
-  require_ratchet: bool = False,
   quantum_safe_only: bool = True,
 ) -> tuple[Identity, Key, bytes]:
   """Open and verify a request: (initiator identity, its ephemeral public key, part_a)."""
-  signed, _ = msg._open(me, cose.decode(request), ratchets, require_ratchet)
+  signed, _ = msg._open(cose.decode(request), ratchets)
   sm = cose.decode(signed)
   sender_addr = signer_of(sm)
   sender = resolve(sender_addr) if sender_addr else None
@@ -135,16 +134,13 @@ def accept_request(
   request: bytes,
   resolve,
   ratchets=None,
-  require_ratchet: bool = False,
   quantum_safe_only: bool = True,
 ) -> tuple[Identity, bytes, LinkKeys]:
   """
   B's side: open and verify a request. Returns (initiator identity, accept
   payload to send back to it, link keys). Raises CoseError if anything is off.
   """
-  sender, eph, part_a = read_request(
-    me, request, resolve, ratchets, require_ratchet, quantum_safe_only
-  )
+  sender, eph, part_a = read_request(me, request, resolve, ratchets, quantum_safe_only)
   lid = link_id(request)
   part_b = os.urandom(PART_SIZE)
   transcript = hashlib.sha256(request).digest()

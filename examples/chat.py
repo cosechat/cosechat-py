@@ -36,14 +36,13 @@ def build_node(a):
   if a.lock:
     passphrase = os.environ.get('COSIECHAT_PASSPHRASE') or getpass.getpass('key passphrase: ')
   ident = storage.load_identity(a.identity, a.suite, passphrase)
-  ratchets = None if a.no_forward_secrecy else storage.ratchets_for(a.identity, ident, passphrase)
+  ratchets = storage.ratchets_for(a.identity, ident, passphrase)
   node = Node(
     ident,
     transport=a.transport,
     propagate=a.propagate,
     app_data={'name': a.name} if a.name else None,
     quantum_safe_only=not a.allow_prequantum,
-    forward_secrecy=not a.no_forward_secrecy,
     ratchets=ratchets,
   )
   auth = RoadAuth.from_passphrase(a.road_key, a.road_key_mode) if a.road_key else None
@@ -151,7 +150,6 @@ def main():
   p.add_argument('--transport', action='store_true', help='route for others')
   p.add_argument('--propagate', action='store_true', help='store and forward for offline peers')
   p.add_argument('--announce-interval', type=float, default=600.0)
-  p.add_argument('--no-forward-secrecy', action='store_true', help='INSECURE: long-term keys only')
   p.add_argument(
     '--allow-prequantum', action='store_true', help='INSECURE: also talk to prequantum peers'
   )

@@ -3,16 +3,14 @@ Messages and announces: the LXMF-like layer.
 
 A message is sign-then-encrypt:
 
-  content = CBOR map {1: [to addresses], 2: time ms, 3: title, 4: content, 5: fields}
+  content = CBOR map {1: [to addresses], 2: time ms, 3: title, 4: content, 5: fields, 6: receipt secret}
             (the time is the sender's claim, shown to users; nothing here acts on it)
   signed  = COSE_Sign1 / COSE_Sign over content, protected kid = sender address
-  sealed  = COSE_Encrypt0 to one recipient (HPKE integrated)
-            COSE_Encrypt  to many recipients sharing one ciphertext (HPKE-KE, no kids)
+  sealed  = COSE_Encrypt0 to the recipient's ratchet (HPKE integrated, kid = ratchet id)
+            or, as an extra, one COSE_Encrypt shared by several recipients (HPKE-KE, no kids)
 
-Each recipient key is that recipient's current *ratchet* (forward secrecy,
-see ratchet.py) when the sender has one, else their long-term KEM key. An
-Encrypt0 sealed to a ratchet names it with the ratchet id in its unprotected
-kid, so the receiver finds the right private key directly.
+Identities have no encryption key: every message is sealed to a ratchet the
+recipient announced (ratchet.py).
 
 Routers only ever see `sealed`, addressed by a packet header that holds the
 destination address. Sender, the full recipient list, and content are only
@@ -20,15 +18,25 @@ visible to a recipient. The recipient list is inside the signature, so a
 message cannot be re-encrypted to someone else and passed off as addressed
 to them.
 
-An announce is a signed statement "this keyset lives at this address, and
-this is its current ratchet":
+An announce is a signed statement "this identity is here, and this is its
+ratchet":
 
   COSE_Sign1 / COSE_Sign over CBOR map
-    {1: public keyset, 2: sequence, 3: nonce, 4: app data, 5: ratchet COSE_Key}
+    {1: public keyset (only in *full* announces), 2: sequence, 3: nonce,
+     4: app data, 5: ratchet COSE_Key, 6: [keepalive chain anchor, chain length]}
+
+A *short* announce leaves out the keyset: receivers that already hold it
+(pinned from an earlier full announce, or fetched by address) verify with it.
+The keyset hashes to the address, so it can come from anyone.
 
 The sequence only orders one identity's own announces (the reference uses
 Unix milliseconds, but a device with no clock can use a counter). It is never
 compared with the local clock.
+
+A *keepalive* says "still here, same keys and ratchet" for ~50 bytes: it
+reveals the next value of a SHA-256 hash chain whose anchor was in the last
+signed announce. Only the identity knows the chain's earlier values, and a
+hash chain needs no signature, so it is quantum-safe.
 """
 
 import hashlib
@@ -59,6 +67,11 @@ A_SEQUENCE = 2
 A_NONCE = 3
 A_APP_DATA = 4
 A_RATCHET = 5
+A_CHAIN = 6
+
+CHAIN_VALUE_SIZE = 32
+CHAIN_LENGTH = 1024  # keepalives per signed announce
+MAX_CHAIN_SKIP = 256  # a receiver checks at most this many missed keepalives
 
 # unprotected Sign1/Sign header carrying the sender's public keyset, so a
 # recipient that never saw the sender's announce can still verify
@@ -85,7 +98,7 @@ class Message:
   fields: dict = field(default_factory=dict)
   id: bytes = b''
   signed: bytes = b''
-  # id of our ratchet it was sealed to (None: our long-term identity key)
+  # id of our ratchet it was sealed to
   ratchet_id: bytes | None = None
   # the sender wants a receipt: send receipt_tag(secret, our address) back
   receipt_secret: bytes | None = None
@@ -148,12 +161,17 @@ def sign_message(
   )
 
 
-def envelope(signed: bytes, recipient: Identity, ratchet: Key | None = None) -> bytes:
-  """COSE_Encrypt0 of a signed message to one recipient's ratchet (kid = ratchet id) or identity."""
-  if ratchet is not None:
-    check_ratchet(ratchet, recipient.kem_key)
-    return cose.encrypt0(signed, ratchet, include_kid=True)
-  return cose.encrypt0(signed, recipient.kem_key)
+def envelope(signed: bytes, ratchet: Key) -> bytes:
+  """COSE_Encrypt0 of a signed message to a recipient's ratchet (kid = ratchet id)."""
+  check_ratchet(ratchet)
+  return cose.encrypt0(signed, ratchet, include_kid=True)
+
+
+def _ratchet_for(ratchets: dict[bytes, Key], r: Identity) -> Key:
+  rk = ratchets.get(r.address)
+  if rk is None:
+    raise ValueError(f'no ratchet for {r.address.hex()}: it has to announce one')
+  return rk
 
 
 def seal(
@@ -170,22 +188,21 @@ def seal(
 ) -> tuple[bytes, Message]:
   """
   Sign and encrypt one sealed message for all recipients. Returns (sealed, message).
-  One recipient gives COSE_Encrypt0 unless integrated=False; several share one
-  COSE_Encrypt. `ratchets` maps recipient address -> their announced ratchet.
+  `ratchets` maps each recipient address to its announced ratchet. One
+  recipient gives COSE_Encrypt0 unless integrated=False; several share one
+  COSE_Encrypt (an extra: see seal_each for what a node sends).
   """
   m = sign_message(
     sender, recipients, content, title, fields, timestamp, attach_identity, receipt_secret
   )
   ratchets = ratchets or {}
   if len(recipients) == 1 and integrated:
-    return envelope(m.signed, recipients[0], ratchets.get(recipients[0].address)), m
+    return envelope(m.signed, _ratchet_for(ratchets, recipients[0])), m
   keys = []
   for r in recipients:
-    rk = ratchets.get(r.address)
-    if rk is not None:
-      check_ratchet(rk, r.kem_key)
-      rk = Key(rk.alg, rk.pub)  # no kid: shared envelopes do not name recipients
-    keys.append(rk or r.kem_key)
+    rk = _ratchet_for(ratchets, r)
+    check_ratchet(rk)
+    keys.append(Key(rk.alg, rk.pub))  # no kid: shared envelopes do not name recipients
   return cose.encrypt(m.signed, keys), m
 
 
@@ -210,11 +227,11 @@ def seal_each(
     sender, recipients, content, title, fields, timestamp, attach_identity, receipt_secret
   )
   ratchets = ratchets or {}
-  return {r.address: envelope(m.signed, r, ratchets.get(r.address)) for r in recipients}, m
+  return {r.address: envelope(m.signed, _ratchet_for(ratchets, r)) for r in recipients}, m
 
 
-def _open(me: Identity, env: cose.Message, ratchets: Ratchets, require_ratchet: bool):
-  """Returns (signed bytes, ratchet id or None)."""
+def _open(env: cose.Message, ratchets: Ratchets):
+  """Returns (signed bytes, id of the ratchet that opened it)."""
   if hasattr(ratchets, 'keys') and hasattr(ratchets, 'get'):
     lookup, newest = ratchets.get, ratchets.keys
   else:
@@ -228,18 +245,14 @@ def _open(me: Identity, env: cose.Message, ratchets: Ratchets, require_ratchet: 
       if rk is None:
         raise CoseError('sealed to a ratchet we no longer have (or never had)')
       return cose.decrypt0(env, rk), rid
-    if require_ratchet:
-      raise CoseError('sealed to our long-term key, but ratchets are required')
-    return cose.decrypt0(env, me.kem_key), None
+    raise CoseError('sealed message names no ratchet')
   if env.kind == 'Encrypt':
     for rk in newest()[:MAX_TRIAL_RATCHETS]:
       try:
         return cose.decrypt(env, rk), rk.kid
       except CoseError:
         pass
-    if require_ratchet:
-      raise CoseError('no current ratchet opens this message, and ratchets are required')
-    return cose.decrypt(env, me.kem_key), None
+    raise CoseError('none of our recent ratchets opens this message')
   raise CoseError(f'COSE_{env.kind} is not a sealed message')
 
 
@@ -248,14 +261,12 @@ def unseal(
   sealed: bytes,
   resolve: Callable[[bytes], Identity | None],
   ratchets: Ratchets = None,
-  require_ratchet: bool = False,
 ) -> Message:
   """
-  Decrypt with one of our ratchets (or our identity KEM key) and verify the
-  sender. `resolve(address)` returns the sender's public identity or None.
-  With require_ratchet, messages sealed to the long-term key are refused.
+  Decrypt with one of our ratchets and verify the sender. `resolve(address)`
+  returns the sender's public identity or None.
   """
-  signed, rid = _open(me, cose.decode(sealed), ratchets, require_ratchet)
+  signed, rid = _open(cose.decode(sealed), ratchets)
 
   sm = cose.decode(signed)
   sender_addr = signer_of(sm)
@@ -304,13 +315,23 @@ def attached_identity(signed: bytes) -> Identity | None:
 # --- announces ---
 
 
+class KeysetNeeded(CoseError):
+  """A short announce from an identity whose keyset we do not have yet."""
+
+  def __init__(self, address: bytes):
+    super().__init__(f'need the keyset for {address.hex()}')
+    self.address = address
+
+
 @dataclass
 class Announce:
   identity: Identity
   sequence: int
   nonce: bytes
+  ratchet: Key
   app_data: Any = None
-  ratchet: Key | None = None
+  chain: tuple[bytes, int] | None = None  # (anchor, length) for keepalives
+  full: bool = True  # carried its keyset
 
   @property
   def address(self) -> bytes:
@@ -319,45 +340,147 @@ class Announce:
 
 def make_announce(
   identity: Identity,
+  ratchet: Key,
   app_data: Any = None,
   sequence: int | None = None,
-  ratchet: Key | None = None,
+  chain: 'HashChain | None' = None,
+  full: bool = True,
 ) -> bytes:
-  """`sequence` must grow with each announce of this identity (default: Unix ms)."""
+  """
+  `sequence` must grow with each announce of this identity (default: Unix ms).
+  full=False leaves out the keyset (receivers must already have it).
+  """
   body = {
-    A_IDENTITY: identity.public_bytes,
     A_SEQUENCE: now_ms() if sequence is None else sequence,
     A_NONCE: os.urandom(8),
   }
+  if full:
+    body[A_IDENTITY] = identity.public_bytes
   if app_data is not None:
     body[A_APP_DATA] = app_data
-  if ratchet is not None:
-    check_ratchet(ratchet, identity.kem_key)
-    body[A_RATCHET] = ratchet.public().to_cose()
+  check_ratchet(ratchet)
+  body[A_RATCHET] = ratchet.public().to_cose()
+  if chain is not None:
+    body[A_CHAIN] = [chain.anchor, chain.length]
   return identity.sign(cbor.dumps(body))
 
 
-def verify_announce(data: bytes, address: bytes | None = None) -> Announce:
-  """Check the signature, that the keyset hashes to the signed kid (and `address`), and the ratchet."""
+def announce_address(data: bytes) -> bytes | None:
+  """The address an announce claims (its signature kid), without verifying anything."""
+  try:
+    return signer_of(cose.decode(data))
+  except CoseError:
+    return None
+
+
+def verify_announce(
+  data: bytes,
+  address: bytes | None = None,
+  known: Callable[[bytes], Identity | None] | None = None,
+) -> Announce:
+  """
+  Check an announce: its keyset (included, or `known(address)` for a short
+  one) hashes to the signed kid and to `address`, the signature verifies, and
+  the ratchet is well formed. Raises KeysetNeeded for a short announce from an
+  identity `known` does not have.
+  """
   sm = cose.decode(data)
   kid = signer_of(sm)
+  if kid is None:
+    raise CoseError('announce without a kid')
+  if address is not None and address != kid:
+    raise CoseError('announce is for a different address')
   body = cbor.loads(sm.content)
   pub = body.get(A_IDENTITY)
-  if not isinstance(pub, bytes):
-    raise CoseError('announce without identity')
-  ident = Identity.from_bytes(pub)
-  if kid != ident.address:
-    raise CoseError('announce kid does not match its identity')
-  if address is not None and address != ident.address:
-    raise CoseError('announce is for a different address')
+  if pub is not None:
+    if not isinstance(pub, bytes) or address_of(pub) != kid:
+      raise CoseError('announce keyset does not match its kid')
+    ident = Identity.from_bytes(pub)
+  else:
+    ident = known(kid) if known else None
+    if ident is None:
+      raise KeysetNeeded(kid)
   ident.verify(sm)
-  ratchet = None
-  if A_RATCHET in body:
-    ratchet = Key.from_cose(body[A_RATCHET])
-    if ratchet.has_private:
-      raise CoseError('announced ratchet contains a private key')
-    check_ratchet(ratchet, ident.kem_key)
+  if A_RATCHET not in body:
+    raise CoseError('announce has no ratchet')
+  ratchet = Key.from_cose(body[A_RATCHET])
+  if ratchet.has_private:
+    raise CoseError('announced ratchet contains a private key')
+  check_ratchet(ratchet)
   seq = body.get(A_SEQUENCE, 0)
   if not isinstance(seq, int) or seq < 0:
     raise CoseError('announce sequence must be an unsigned integer')
-  return Announce(ident, seq, body.get(A_NONCE, b''), body.get(A_APP_DATA), ratchet)
+  chain = body.get(A_CHAIN)
+  if chain is not None:
+    if not (
+      isinstance(chain, list)
+      and len(chain) == 2
+      and isinstance(chain[0], bytes)
+      and len(chain[0]) == CHAIN_VALUE_SIZE
+      and isinstance(chain[1], int)
+      and chain[1] > 0
+    ):
+      raise CoseError('bad keepalive chain in announce')
+    chain = (chain[0], chain[1])
+  return Announce(
+    ident, seq, body.get(A_NONCE, b''), ratchet, body.get(A_APP_DATA), chain, pub is not None
+  )
+
+
+# --- keepalives (hash chain) ---
+
+
+def chain_step(value: bytes) -> bytes:
+  return hashlib.sha256(b'cosiechat chain' + value).digest()
+
+
+class HashChain:
+  """
+  value(0) is the anchor (published in a signed announce); value(i) is
+  revealed by the i-th keepalive, and chain_step(value(i)) == value(i - 1).
+  """
+
+  def __init__(self, length: int = CHAIN_LENGTH, seed: bytes | None = None):
+    self.seed = seed or os.urandom(CHAIN_VALUE_SIZE)
+    self.length = length
+    self.index = 0  # last value handed out
+    self.anchor = self.value(0)
+
+  def value(self, i: int) -> bytes:
+    v = self.seed
+    for _ in range(self.length - i):
+      v = chain_step(v)
+    return v
+
+  def next(self) -> tuple[int, bytes] | None:
+    if self.index >= self.length:
+      return None
+    self.index += 1
+    return self.index, self.value(self.index)
+
+
+def keepalive_payload(sequence: int, index: int, value: bytes) -> bytes:
+  return cbor.dumps([sequence, index, value])
+
+
+def parse_keepalive(payload: bytes) -> tuple[int, int, bytes]:
+  try:
+    seq, index, value = cbor.loads(payload)
+  except Exception:
+    raise CoseError('bad keepalive') from None
+  if not (isinstance(seq, int) and isinstance(index, int) and isinstance(value, bytes)):
+    raise CoseError('bad keepalive')
+  return seq, index, value
+
+
+def check_keepalive(
+  last_index: int, last_value: bytes, index: int, value: bytes, length: int
+) -> bool:
+  """Is `value` the chain value at `index`, given the last one we accepted?"""
+  steps = index - last_index
+  if steps <= 0 or steps > MAX_CHAIN_SKIP or index > length or len(value) != CHAIN_VALUE_SIZE:
+    return False
+  v = value
+  for _ in range(steps):
+    v = chain_step(v)
+  return hmac.compare_digest(v, last_value)

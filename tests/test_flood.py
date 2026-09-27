@@ -9,13 +9,15 @@ from cosiechat import message as M
 from cosiechat.identity import Identity
 from cosiechat.node import Node, _Lane
 from cosiechat.packet import ANNOUNCE, Packet, decode
+from cosiechat.ratchet import new_ratchet
 from cosiechat.roads.memory import MemoryHub
 from cosiechat.roads.rnode import RNodeRoad
 
 
 def announce_packet(hops=0, ident=None, seq=None):
   ident = ident or Identity.generate('prequantum')
-  return Packet(ANNOUNCE, hops, ident.address, None, M.make_announce(ident, sequence=seq))
+  data = M.make_announce(ident, new_ratchet(ident.kem_alg), sequence=seq)
+  return Packet(ANNOUNCE, hops, ident.address, None, data)
 
 
 class Recorder:
@@ -139,7 +141,10 @@ def test_junk_announces_rejected_before_signature_check():
       async with a:
         a.identities[pq_victim.address] = pq_victim.public()
         # a different keyset claiming a pinned address, and a prequantum identity
-        wrong = Packet(ANNOUNCE, 0, pq_victim.address, None, M.make_announce(Identity.generate()))
+        other = Identity.generate()
+        wrong = Packet(
+          ANNOUNCE, 0, pq_victim.address, None, M.make_announce(other, new_ratchet(other.kem_alg))
+        )
         a._handle_announce(a.lanes[0], wrong)
         a._handle_announce(a.lanes[0], announce_packet())
     finally:

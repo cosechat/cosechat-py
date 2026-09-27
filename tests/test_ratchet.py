@@ -1,7 +1,5 @@
 """Ratchets: the mechanism (no clocks, no storage), announces, and the forward secrecy they buy."""
 
-import asyncio
-
 import pytest
 from test_node import inbox, make, run, until
 
@@ -43,15 +41,16 @@ def test_memory_ratchets_optional_count_cap():
   assert s.keys() == made[::-1][:3]
 
 
-def test_ratchet_must_match_identity_kem():
-  ident = Identity.generate('pq')
-  check_ratchet(new_ratchet(K.HPKE_9).public(), ident.kem_key)
-  with pytest.raises(CoseError):
-    check_ratchet(new_ratchet(K.HPKE_12).public(), ident.kem_key)
+def test_ratchet_must_be_hpke_with_its_own_id():
+  check_ratchet(new_ratchet(K.HPKE_9).public())
   bad = new_ratchet(K.HPKE_9).public()
   bad.kid = b'\x00' * 8
   with pytest.raises(CoseError):
-    check_ratchet(bad, ident.kem_key)
+    check_ratchet(bad)
+  sig = K.Key.generate(K.ED25519)
+  sig.kid = ratchet_id(sig.pub)
+  with pytest.raises(CoseError):
+    check_ratchet(sig)
 
 
 # --- announces ---
@@ -60,9 +59,9 @@ def test_ratchet_must_match_identity_kem():
 @pytest.mark.parametrize('suite', ['pq', 'hybrid', 'prequantum'])
 def test_announce_carries_signed_ratchet(suite):
   ident = Identity.generate(suite)
-  s = store(ident.kem_key.alg)
+  s = store(ident.kem_alg)
   r = s.current()
-  ann = M.verify_announce(M.make_announce(ident, ratchet=r), ident.address)
+  ann = M.verify_announce(M.make_announce(ident, r), ident.address)
   assert ann.ratchet.pub == r.pub and ann.ratchet.kid == r.kid
   assert not ann.ratchet.has_private
 
@@ -76,16 +75,8 @@ def test_sealed_to_ratchet_names_it_and_opens():
   r = rs.current()
   sealed, sent = M.seal(a, [b.public()], 'fs', ratchets={b.address: r.public()})
   assert cose.decode(sealed).kid == r.kid
-  got = M.unseal(b, sealed, book(a), ratchets=rs, require_ratchet=True)
+  got = M.unseal(b, sealed, book(a), ratchets=rs)
   assert got.id == sent.id and got.ratchet_id == r.kid
-
-
-def test_long_term_key_cannot_open_ratchet_message():
-  a, b = Identity.generate(), Identity.generate()
-  rs = store()
-  sealed, _ = M.seal(a, [b.public()], 'fs', ratchets={b.address: rs.current().public()})
-  with pytest.raises(CoseError):
-    M.unseal(b, sealed, book(a))
 
 
 def test_forward_secrecy_once_ratchet_is_discarded():
@@ -101,15 +92,6 @@ def test_forward_secrecy_once_ratchet_is_discarded():
     M.unseal(stolen, sealed, book(a), ratchets=rs)
 
 
-def test_require_ratchet_refuses_long_term_key():
-  a, b = Identity.generate(), Identity.generate()
-  rs = store()
-  sealed, _ = M.seal(a, [b.public()], 'old style')
-  assert M.unseal(b, sealed, book(a), ratchets=rs).ratchet_id is None
-  with pytest.raises(CoseError, match='required'):
-    M.unseal(b, sealed, book(a), ratchets=rs, require_ratchet=True)
-
-
 def test_seal_each_gives_each_recipient_its_own_envelope():
   a = Identity.generate()
   bs = [Identity.generate() for _ in range(2)]
@@ -119,7 +101,7 @@ def test_seal_each_gives_each_recipient_its_own_envelope():
   for b, s in zip(bs, stores, strict=True):
     env = cose.decode(sealed[b.address])
     assert env.kind == 'Encrypt0' and env.kid == rks[b.address].kid
-    got = M.unseal(b, sealed[b.address], book(a), ratchets=s, require_ratchet=True)
+    got = M.unseal(b, sealed[b.address], book(a), ratchets=s)
     assert got.id == sent.id and set(got.recipients) == {x.address for x in bs}
 
 
@@ -132,7 +114,7 @@ def test_shared_encrypt_with_ratchets_names_nobody():
   env = cose.decode(sealed)
   assert env.kind == 'Encrypt' and all(layer.kid is None for layer, _ in env.recipients)
   for b, s in zip(bs, stores, strict=True):
-    assert M.unseal(b, sealed, book(a), ratchets=s, require_ratchet=True).ratchet_id is not None
+    assert M.unseal(b, sealed, book(a), ratchets=s).ratchet_id is not None
 
 
 # --- nodes ---
@@ -203,59 +185,22 @@ def test_announce_sequence_is_not_checked_against_any_clock():
     async with a:
       for seq in (1, 10**15):
         peer = Identity.generate()
-        data = M.make_announce(peer, sequence=seq, ratchet=new_ratchet(peer.kem_key.alg))
+        data = M.make_announce(peer, new_ratchet(peer.kem_alg), sequence=seq)
         a._handle_announce(a.lanes[0], Packet(ANNOUNCE, 0, peer.address, None, data))
         assert a.peer_ratchet(peer.address) is not None
 
   run(main())
 
 
-def test_sender_refuses_peer_without_ratchet():
+def test_cannot_message_a_peer_that_never_announced():
+  """Identities have no KEM key: without an announce (and its ratchet) there is nothing to seal to."""
+
   async def main():
     hub = MemoryHub()
     a = make(hub)
-    legacy = make(hub, forward_secrecy=False)  # announces no ratchet
-    async with a, legacy:
-      await legacy.announce()
-      await until(lambda: legacy.address in a.paths)
-      with pytest.raises(LookupError, match='ratchet'):
-        await a.send(legacy.address, 'x', timeout=0.2)
-
-  run(main())
-
-
-def test_forward_secrecy_can_be_turned_off_on_both_ends():
-  async def main():
-    hub = MemoryHub()
-    a, b = make(hub, forward_secrecy=False), make(hub, forward_secrecy=False)
-    box = inbox(b)
-    async with a, b:
-      await a.announce()
-      await b.announce()
-      await until(lambda: b.address in a.paths and a.address in b.paths)
-      await a.send(b.address, 'long-term key')
-      await until(lambda: box)
-    assert box[0].ratchet_id is None and b.ratchets is None
-
-  run(main())
-
-
-def test_receiver_with_fs_drops_long_term_key_messages():
-  async def main():
-    hub = MemoryHub()
-    a = make(hub, forward_secrecy=False)
-    b = make(hub)
-    box = inbox(b)
-    async with a, b:
-      await a.announce()
-      await b.announce()
-      await until(lambda: b.address in a.paths and a.address in b.paths)
-      # a has b's ratchet, so even with FS off it uses it
-      await a.send(b.address, 'uses ratchet anyway')
-      await until(lambda: box)
-      sealed, _ = M.seal(a.identity, [b.identity.public()], 'long-term')
-      await a._send_data(b.address, sealed)
-      await asyncio.sleep(0.1)
-    assert [m.content for m in box] == ['uses ratchet anyway']
+    stranger = Identity.generate()  # known out of band, never announced
+    async with a:
+      with pytest.raises(LookupError, match='announce'):
+        await a.send(stranger.public(), 'x', timeout=0.2)
 
   run(main())

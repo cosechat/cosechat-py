@@ -91,12 +91,11 @@ def main():
     sealed = bytes.fromhex(m['data'])
     env = cose.decode(sealed)
     for who in m['to']:
-      me = ids[(m['suite'], who)]
       name = f'message[{n}]:{m["suite"]}:{m["kind"]}->{who}'
-      # the key that opens it: one of the recipient's ratchets, or its long-term KEM key
+      # the key that opens it: one of the recipient's ratchets
       opener = cose.decrypt0 if env.kind == 'Encrypt0' else cose.decrypt
       signed = key = None
-      for k in [*rks[(m['suite'], who)], me.kem_key]:
+      for k in rks[(m['suite'], who)]:
         try:
           signed, key = opener(env, k), k
           break
@@ -104,7 +103,7 @@ def main():
           pass
       if key.alg in WOLFCOSE_ALGS:
         add(
-          name + (':envelope(ratchet)' if key is not me.kem_key else ':envelope'),
+          name + ':envelope',
           'hpke0' if env.kind == 'Encrypt0' else 'enc',
           [keyhex(key)],
           sealed,

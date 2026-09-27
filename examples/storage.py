@@ -155,13 +155,21 @@ class FileRatchets:
 def ratchets_for(identity_path: Path, identity: Identity, passphrase: str | None = None, **kw):
   """Ratchets live next to their identity: <identity>.ratchets"""
   path = identity_path.with_name(identity_path.name + '.ratchets')
-  return FileRatchets(identity.kem_key.alg, path, passphrase=passphrase, **kw)
+  return FileRatchets(identity.kem_alg, path, passphrase=passphrase, **kw)
 
 
 async def announce_forever(node, interval: float, ratchets: FileRatchets | None = None):
-  """Apply the ratchet policy, then announce, every `interval` seconds."""
+  """
+  Every `interval` seconds: apply the ratchet policy, then send a signed
+  announce if the ratchet changed (or on the first round), otherwise a
+  ~70-byte keepalive.
+  """
+  first = True
   while True:
-    if ratchets is not None:
-      ratchets.maintain()
-    await node.announce()
+    rotated = ratchets.maintain() if ratchets is not None else False
+    if first or rotated:
+      await node.announce()
+    else:
+      await node.keepalive()
+    first = False
     await asyncio.sleep(interval)
