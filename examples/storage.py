@@ -160,16 +160,13 @@ def ratchets_for(identity_path: Path, identity: Identity, passphrase: str | None
 
 async def announce_forever(node, interval: float, ratchets: FileRatchets | None = None):
   """
-  Every `interval` seconds: apply the ratchet policy, then send a signed
-  announce if the ratchet changed (or on the first round), otherwise a
-  ~70-byte keepalive.
+  Apply the ratchet policy and announce, now and then every `interval`
+  seconds. Announce rarely on slow roads: peers keep paths for a week, and
+  ask (path request) when they need one. A rotated ratchet takes effect at
+  the next announce; messages to older ones still open while they are kept.
   """
-  first = True
   while True:
-    rotated = ratchets.maintain() if ratchets is not None else False
-    if first or rotated:
-      await node.announce()
-    else:
-      await node.keepalive()
-    first = False
+    if ratchets is not None:
+      ratchets.maintain()
+    await node.announce()
     await asyncio.sleep(interval)

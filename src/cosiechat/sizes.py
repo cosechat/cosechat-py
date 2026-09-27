@@ -15,7 +15,6 @@ from .packet import (
   ANNOUNCE,
   DATA,
   FRAGMENT_OVERHEAD,
-  KEEPALIVE,
   LINK_ACCEPT,
   LINK_DATA,
   LINK_REQUEST,
@@ -37,16 +36,14 @@ def frames(packet: bytes, mtu: int = LORA_MTU) -> int:
 def measure(suite: str) -> dict:
   a, b = Identity.generate(suite), Identity.generate(suite)
   ra, rb = new_ratchet(a.kem_alg), new_ratchet(b.kem_alg)
-  chain = M.HashChain()
   out = {'keyset': len(a.public_bytes)}
 
   def pkt(kind, payload, dest=a.address):
     return Packet(kind, 0, dest, None, payload).encode()
 
-  args = dict(app_data={'name': 'alice'}, sequence=SEQUENCE, chain=chain)
+  args = dict(app_data={'name': 'alice'}, sequence=SEQUENCE)
   out['full announce'] = pkt(ANNOUNCE, M.make_announce(a, ra, full=True, **args))
   out['short announce'] = pkt(ANNOUNCE, M.make_announce(a, ra, full=False, **args))
-  out['keepalive'] = pkt(KEEPALIVE, M.keepalive_payload(SEQUENCE, *chain.next()))
   sealed, m = M.seal(
     a, [b.public()], TEXT, ratchets={b.address: rb.public()}, receipt_secret=b'\x00' * 16
   )
@@ -58,7 +55,7 @@ def measure(suite: str) -> dict:
     b, pending.request, {a.address: a.public()}.get, ratchets=[rb], quantum_safe_only=False
   )
   out['link accept'] = pkt(LINK_ACCEPT, accept)
-  body = L.message_body(a.address, TEXT, receipt_secret=b'\x00' * 16)
+  body = L.message_body(TEXT, receipt_secret=b'\x00' * 16)
   out['link message'] = pkt(LINK_DATA, L.seal(kb, body))
   return out
 

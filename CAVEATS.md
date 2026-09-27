@@ -44,9 +44,10 @@ Known limits of cosiechat as it stands. The wire format is in
   node holding it can answer, but if none is reachable the short announce is
   useless to that node until the identity sends a full one (it does on
   start-up, and when asked with a path request).
-* **Keepalive chains live in memory.** After a restart a node sends a new
-  signed announce with a new chain, and keepalives cannot carry changes (a
-  new ratchet or app data needs a signed announce).
+* **Paths last a week** (local clock, like Reticulum) unless a newer announce
+  replaces them. A path through a transport node that has gone away is only
+  noticed when messages stop getting receipts; the node then needs a new
+  announce or a path request. There is no active path-failure detection yet.
 * **No dates are trusted.** The library never expires or rejects anything by
   comparing a peer's timestamp with its own clock. Announce sequence numbers
   only order one identity's own announces. The price: a peer that rotates
@@ -104,14 +105,14 @@ Known limits of cosiechat as it stands. The wire format is in
 ## Airtime and size
 
 Measured sizes for every packet kind and suite are in SPEC §14 (generated from
-the code). For the default `pq` suite: a full announce is 6,643 bytes (14 LoRa
-frames), a short one 4,676 (10), a keepalive 69, a sealed message about 4.6
-KB (10 frames), and a link message 149 bytes.
+the code). For the default `pq` suite: a full announce is 6,594 bytes (14 LoRa
+frames), a short one 4,627 (10), a sealed message 4,595 (10 frames), and a
+link message 130 bytes.
 
 Within the 2% announce budget (SPEC §9.0) one LoRa channel, shared by *every*
 node on it, carries one short `pq` announce about every 6 minutes at SF7, 10
-minutes at SF8, and 1.8 hours at SF12. Keepalives cost seconds instead, so
-send signed announces only when something changes. Meshes with many nodes on
+minutes at SF8, and 1.8 hours at SF12. So announce rarely, as Reticulum
+does: paths last a week, and senders ask when they need one. Meshes with many nodes on
 slow LoRa settings will still be slow to learn new paths. Links (SPEC §9.2)
 make the per-message cost small once a path is known. Duty-cycle limits (e.g.
 1% in parts of the EU 868 MHz band) also cap how often you can send.

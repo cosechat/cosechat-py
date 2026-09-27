@@ -32,24 +32,24 @@ def handshake():
 def test_handshake_and_both_directions():
   a, b, _, _, _, ka, kb = handshake()
   assert ka.link_id == kb.link_id and ka.send_key.priv == kb.recv_key.priv
-  wire = L.seal(ka, L.message_body(b.address, 'hi b'))
+  wire = L.seal(ka, L.message_body('hi b'))
   assert len(wire) < 100
   m, close = L.read_message(kb, b.address, L.unseal(kb, wire))
   assert (m.content, m.sender, m.link_id, close) == ('hi b', a.address, ka.link_id, False)
-  back = L.seal(kb, L.message_body(a.address, 'hi a'))
+  back = L.seal(kb, L.message_body('hi a'))
   assert L.read_message(ka, a.address, L.unseal(ka, back))[0].content == 'hi a'
 
 
 def test_directions_use_different_keys():
   _, b, _, _, _, ka, kb = handshake()
-  wire = L.seal(ka, L.message_body(b.address, 'x'))
+  wire = L.seal(ka, L.message_body('x'))
   with pytest.raises(CoseError):
     L.unseal(ka, wire)  # a cannot open its own direction (no reflection)
 
 
 def test_tampered_link_message_rejected():
   _, b, _, _, _, ka, kb = handshake()
-  wire = bytearray(L.seal(ka, L.message_body(b.address, 'x')))
+  wire = bytearray(L.seal(ka, L.message_body('x')))
   wire[-3] ^= 1
   with pytest.raises(CoseError):
     L.unseal(kb, bytes(wire))

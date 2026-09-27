@@ -149,7 +149,7 @@ def main():
   p.add_argument('--name', help='display name to announce')
   p.add_argument('--transport', action='store_true', help='route for others')
   p.add_argument('--propagate', action='store_true', help='store and forward for offline peers')
-  p.add_argument('--announce-interval', type=float, default=600.0)
+  p.add_argument('--announce-interval', type=float, default=1800.0)
   p.add_argument(
     '--allow-prequantum', action='store_true', help='INSECURE: also talk to prequantum peers'
   )

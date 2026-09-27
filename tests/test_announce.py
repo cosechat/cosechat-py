@@ -1,12 +1,11 @@
-"""Smaller announces: signing-only keysets, short announces with keyset fetch, hash-chain keepalives."""
+"""Smaller announces (signing-only keysets, short announces with keyset fetch) and path expiry."""
 
 import asyncio
 
-from test_node import make, run, until
+from test_node import inbox, make, run, until
 
-from cosiechat import message as M
 from cosiechat.node import Node
-from cosiechat.packet import KEEPALIVE, KEYSET, KEYSET_REQUEST, Packet, decode
+from cosiechat.packet import KEYSET, KEYSET_REQUEST, Packet, decode
 from cosiechat.roads.memory import MemoryHub
 
 
@@ -77,62 +76,6 @@ def test_keyset_fetch_through_a_transport():
   run(main())
 
 
-def test_keepalive_is_tiny_and_refreshes_the_path():
-  async def main():
-    hub = MemoryHub()
-    a, b = make(hub), make(hub)
-    async with a, b:
-      await a.announce()
-      await until(lambda: a.address in b.paths)
-      before = b.paths[a.address].updated
-      sent = spy(a)
-      await asyncio.sleep(0.01)
-      await a.keepalive()
-      await until(lambda: b.paths[a.address].updated > before)
-    assert [t for t, _ in sent] == [KEEPALIVE]
-    assert sent[0][1] < 80
-
-  run(main())
-
-
-def test_forged_or_replayed_keepalives_do_nothing():
-  async def main():
-    hub = MemoryHub()
-    a, b = make(hub), make(hub)
-    async with a, b:
-      await a.announce()
-      await until(lambda: a.address in b.paths)
-      state = list(b._peer_chains[a.address])
-      forged = Packet(KEEPALIVE, 0, a.address, None, M.keepalive_payload(state[0], 1, b'\x00' * 32))
-      b._handle_keepalive(b.lanes[0], forged)
-      assert b._peer_chains[a.address] == state
-      await a.keepalive()
-      await until(lambda: b._peer_chains[a.address][2] == 1)
-      real_value = b._peer_chains[a.address][3]
-      replay = Packet(KEEPALIVE, 0, a.address, None, M.keepalive_payload(state[0], 1, real_value))
-      b._handle_keepalive(b.lanes[0], replay)
-      assert b._peer_chains[a.address][2] == 1
-
-  run(main())
-
-
-def test_keepalives_cross_a_transport():
-  async def main():
-    h1, h2 = MemoryHub(), MemoryHub()
-    a = make(h1)
-    t = Node(transport=True, rebroadcast_delay=0.01, rebroadcast_min_interval=0)
-    t.add_road(h1.road())
-    t.add_road(h2.road())
-    b = make(h2)
-    async with a, t, b:
-      await a.announce()
-      await until(lambda: a.address in b.paths)
-      await a.keepalive()
-      await until(lambda: b._peer_chains[a.address][2] == 1, timeout=5)
-
-  run(main())
-
-
 def test_path_request_answer_is_full():
   async def main():
     hub = MemoryHub()
@@ -165,5 +108,39 @@ def test_keyset_answer_needs_a_matching_address():
         c._keyset_asked[a.address] = set()
         c._handle_keyset(c.lanes[0], Packet(KEYSET, 0, a.address, None, b.identity.public_bytes))
         assert c.known(a.address) is None
+
+  run(main())
+
+
+def test_paths_expire_and_are_found_again():
+  async def main():
+    hub = MemoryHub()
+    a, b = make(hub), make(hub, path_ttl=0.2)
+    box = inbox(a)
+    async with a, b:
+      await a.announce()
+      await b.announce()
+      await until(lambda: b.path(a.address) and a.path(b.address))
+      await asyncio.sleep(0.25)
+      assert b.path(a.address) is None  # forgotten on the local clock
+      # sending asks the mesh again (a answers its path request)
+      m = await b.send(a.address, 'still there?', timeout=5)
+      assert await b.delivered(m, timeout=5)
+      assert b.path(a.address) is not None and box[0].content == 'still there?'
+
+  run(main())
+
+
+def test_a_fresh_announce_refreshes_the_path():
+  async def main():
+    hub = MemoryHub()
+    a, b = make(hub), make(hub, path_ttl=0.3)
+    async with a, b:
+      await a.announce()
+      await until(lambda: b.path(a.address))
+      first = b.path(a.address).expires
+      await asyncio.sleep(0.05)
+      await a.announce()
+      await until(lambda: b.path(a.address) and b.path(a.address).expires > first)
 
   run(main())

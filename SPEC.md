@@ -100,7 +100,6 @@ today and decrypts it later ("harvest now, decrypt later"):
 | key encapsulation | X-Wing: ML-KEM-768 (FIPS 203, NIST level 3) + X25519 | stays secure if *either* part holds: ML-KEM against quantum, X25519 against a flaw in ML-KEM |
 | signatures | ML-DSA-65 (FIPS 204, NIST level 3); `hybrid` adds Ed25519 and requires both | a forger must break ML-DSA |
 | forward secrecy | messages are sealed to announced ratchets (§7.1), X-Wing for `pq`/`hybrid` | identities have no encryption key: stealing one opens nothing; deleted ratchets open nothing |
-| keepalives | SHA-256 hash chain (§7.3) | a forger must find a SHA-256 preimage |
 | content / MAC / KDF | AES-256-GCM, HMAC-SHA-256, SHAKE256, SHA-256 | Grover's algorithm only halves symmetric strength, leaving ≥ 128 bits |
 | addresses | SHA-256 truncated to 128 bits | forging a keyset for an existing address is a second preimage: about 2⁶⁴ *sequential* quantum SHA-256 evaluations, far beyond reach; nodes also pin addresses (§9) |
 
@@ -278,10 +277,8 @@ optional forms, mainly as a demonstration of COSE:
 ```
 body     = { 1: public keyset (bstr)          ; only in a *full* announce (§7.2)
              2: sequence (uint),
-             3: nonce (8 random bytes),
              4: app data (any, optional),
-             5: ratchet (public COSE_Key),   ; required (§7.1)
-             6: [chain anchor (bstr .size 32), chain length (uint)] }  ; optional (§7.3)
+             5: ratchet (public COSE_Key) }  ; required (§7.1)
 announce = identity signature over bstr(body)       ; protected kid = address
 ```
 
@@ -290,7 +287,8 @@ the keyset (from field 1, or the one it holds for that address) hashes to it,
 and that the signature verifies with that keyset. App data is
 application-defined; the examples send `{"name": ...}`.
 
-The **sequence** MUST grow with every signed announce of an identity. A
+The **sequence** MUST grow with every announce of an identity (so every
+announce is also unique for duplicate filtering). A
 receiver MUST ignore an announce whose sequence is lower than the last one it
 accepted for that identity, so a replayed old announce cannot bring back an
 old path or ratchet. The sequence only orders an identity's own announces,
@@ -355,29 +353,6 @@ A transport node without the keyset forwards the request (`hops + 1`) and
 passes the answer back to the roads it forwarded from. Nodes only take
 keysets they asked for.
 
-### 7.3 Keepalives
-
-Most announces say nothing new ("still here, same keys and ratchet"). A
-**keepalive** says that for 69 bytes, with no signature, using a SHA-256 hash
-chain committed in the last signed announce:
-
-```
-chain:     v[L] = random 32 bytes; v[i-1] = SHA-256("cosiechat chain" || v[i]); anchor = v[0]
-announce:  field 6 = [anchor, L]
-keepalive: packet type 8, dest = address, payload = CBOR [announce sequence, i, v[i]]
-```
-
-A receiver that accepted the announce with that sequence, and last accepted
-index `k` with value `v[k]` (the anchor when `k = 0`), accepts a keepalive
-for index `i` if `k < i ≤ L`, `i - k ≤ 256`, and hashing `v[i]` `i - k` times
-gives `v[k]`. It then refreshes the path exactly like an announce would, and
-a transport node passes it on (`hops + 1`, `via` = itself). Only the identity
-knows the chain's later values, and SHA-256 preimages stay out of reach of
-quantum computers, so keepalives are quantum-safe. A replay (`i ≤ k`) or a
-keepalive for another announce's sequence MUST be ignored. When the chain
-runs out, or anything changes (new ratchet, new app data), the node sends a
-new signed announce with a new chain.
-
 ## 8. Packets
 
 ```
@@ -385,14 +360,14 @@ packet = [ version, type, hops, dest, via, payload ]
   version uint, 0 for this draft
   type    0 ANNOUNCE | 1 DATA | 2 PATH_REQUEST | 4 RECEIPT
           | 5 LINK_REQUEST | 6 LINK_ACCEPT | 7 LINK_DATA
-          | 8 KEEPALIVE | 9 KEYSET_REQUEST | 10 KEYSET
+          | 8 KEYSET_REQUEST | 9 KEYSET
   hops    uint, hops travelled so far (originator sends 0)
   dest    bstr .size 16
   via     bstr .size 16 / null   the transport node that should forward it
   payload bstr   announce | sealed message | 8-byte random tag (path request)
                  | receipt tag (16) || random nonce (8)
                  | link request | link accept | link message (§9.2)
-                 | keepalive (§7.3) | 8-byte random tag (keyset request) | keyset (§7.2)
+                 | 8-byte random tag (keyset request) | keyset (§7.2)
 
 packet hash = SHA-256(CBOR [version, type, dest, payload])   ; hops and via excluded
 ```
@@ -431,14 +406,17 @@ Frames that fail are dropped silently. Keys from a passphrase:
 ## 9. Routing (node behaviour)
 
 Every node keeps a duplicate filter of packet hashes (it adds its own sends
-too) and a path table `dest → (road, via, hops, announce time)`.
+too) and a path table `dest → (road, via, hops, announce sequence, expiry)`.
 
 * **Pinning:** once a node holds a keyset for an address, it MUST reject
   announces and keysets carrying a different keyset for that address.
 * **Announce received** (and valid, and not older than the one on file):
   store the keyset and ratchet, set `path = (arrival road, packet.via, packet.hops + 1)`.
   A short announce from an unknown identity waits for its keyset (§7.2).
-* **Keepalive received** (and valid, §7.3): refresh the path the same way.
+* **Path expiry:** a path is forgotten `path_ttl` after the announce that set
+  it, on the node's own clock (the reference uses a week, like Reticulum).
+  Any valid announce refreshes it. With no path, a sender asks with a
+  PATH_REQUEST.
   A *transport* node rebroadcasts it on all its roads with `hops + 1` and
   `via = own address`, after a small random delay, if `hops + 1 < max_hops` (16).
 * **Sending DATA:** seal to the destination's current ratchet (§7.1), then use the path if there is one: `via = path.via` (null when
@@ -458,8 +436,7 @@ too) and a path table `dest → (road, via, hops, announce time)`.
 
 ### 9.0 Announce flood control
 
-Signed announces are big (a full `pq` announce is 6,643 bytes, a short one
-4,676) and flood the mesh, so nodes MUST limit them on slow roads. The
+Announces are big (a full `pq` announce is 6,594 bytes, a short one 4,627) and flood the mesh, so nodes MUST limit them on slow roads. The
 reference, following Reticulum:
 
 * **Airtime budget.** On a road with a known bitrate, announces (own,
@@ -469,9 +446,7 @@ reference, following Reticulum:
 * **Queue.** Waiting announces go out fewest-hops first. Only the newest
   announce per destination is kept, and one that waited over an hour is dropped.
 * **Per-identity limit.** A transport node rebroadcasts any one identity's
-  announces at most once a minute, and its keepalives at most once a minute.
-* **Keepalives** (69 bytes) are not queued behind the budget; they are
-  rate-limited per identity like announces.
+  announces at most once a minute.
 * **Cheap checks first.** Before verifying an announce's signature, drop it
   if its kid is not `dest`, if an included keyset does not hash to `dest` or
   `dest` is pinned to another keyset, or (by default) if the identity or its
@@ -483,12 +458,12 @@ Within a 2% budget on one 125 kHz LoRa channel, shared by every node on it:
 
 | | SF7 (5,469 bit/s) | SF8 (3,125 bit/s) | SF12 (293 bit/s) |
 |---|---:|---:|---:|
-| full `pq` announce | one per 8.1 min | one per 14.2 min | one per 2.5 h |
-| short `pq` announce | one per 5.7 min | one per 10 min | one per 1.8 h |
-| keepalive | one per 5 s | one per 8.8 s | one per 94 s |
+| full `pq` announce | one per 8 min | one per 14 min | one per 2.5 h |
+| short `pq` announce | one per 5.6 min | one per 9.9 min | one per 1.8 h |
 
-So on LoRa, send a signed announce when something changes and keepalives
-otherwise.
+So announce rarely, like Reticulum: paths last a week, and a sender that
+needs a path asks for one. The examples announce every 30 minutes (every
+hour on the LoRa gateway).
 
 ### 9.1 Delivery receipts and retransmission
 
@@ -603,7 +578,7 @@ drives optional flow control. `LEAVE (0x0A) 0xFF` on shutdown.
 | multi-recipient | none | extra: signed once, per-recipient copies (or one shared COSE_Encrypt) |
 | sender | inside encrypted payload | protected `kid` of the signature, inside encryption |
 | ratchets | X25519, opt-in, rotation and retention built in (30 min, 512 kept) | X-Wing (PQ), required, rotation and retention left to storage |
-| announces | full every time | full on first contact, short after, 69-byte hash-chain keepalives |
+| announces | keyset in every announce | keyset only on first contact and in path-request answers |
 | links | X25519 + Ed25519 handshake | X-Wing handshake, one ML-DSA signature, per-link forward secrecy |
 | delivery proofs | signed proofs | 24-byte HMAC receipts (§9.1) |
 | resources, stamps | yes | not yet (see below) |
@@ -619,8 +594,7 @@ aspects), path expiry policy.
 `tests/vectors/vectors.json` (regenerate with `cosiechat vectors`) holds:
 keys and COSE objects for every algorithm; identities with their ratchets;
 sealed messages (to a ratchet, and a shared multi-recipient Encrypt) with
-receipt tags; full and short announces with keepalive chains and keepalives
-that must check out; link handshakes with their derived keys and messages;
+receipt tags; full and short announces; link handshakes with their derived keys and messages;
 packets; and road-auth frames. Signatures and HPKE are randomized, so these
 are "must accept" cases.
 
@@ -629,7 +603,7 @@ tests: tampering, forwarding to a third party, unknown sender, a ratchet we do
 not hold, a signature kid naming someone else, a pre-quantum sender under the
 default policy; announces that are tampered, for another address, older,
 short with the wrong or no keyset, without a ratchet, or with a bad ratchet;
-replayed, forged, out-of-range or mismatched keepalives; malformed frames; a
+malformed frames; a
 link request for someone else; a link accept for another request; and a frame
 under the wrong road key.
 
@@ -655,14 +629,13 @@ the code disagree):
 | | `pq` | `hybrid` | `prequantum` |
 |---|---:|---:|---:|
 | keyset | 1,963 B | 2,005 B | 43 B |
-| full announce | 6,643 B (14 frames) | 6,763 B (14 frames) | 326 B |
-| short announce | 4,676 B (10 frames) | 4,754 B (10 frames) | 279 B |
-| keepalive | 69 B | 69 B | 69 B |
+| full announce | 6,594 B (14 frames) | 6,714 B (14 frames) | 276 B |
+| short announce | 4,627 B (10 frames) | 4,705 B (10 frames) | 230 B |
 | message | 4,595 B (10 frames) | 4,673 B (10 frames) | 291 B |
 | receipt | 48 B | 48 B | 48 B |
 | link request | 5,808 B (12 frames) | 5,886 B (13 frames) | 355 B |
 | link accept | 1,227 B (3 frames) | 1,227 B (3 frames) | 170 B |
-| link message | 149 B | 149 B | 149 B |
+| link message | 130 B | 130 B | 130 B |
 
 Whole packets without road auth; "frames" = RNode frames of 508 bytes after fragmentation. Messages carry the 19-character text "hello, how are you?" and a receipt secret. Generated by `cosiechat sizes`.
 <!-- /sizes -->

@@ -35,7 +35,7 @@ async def main():
   p.add_argument('--udp', type=int, default=4242, help='LAN UDP port (broadcast)')
   p.add_argument('--road-key', help='passphrase authenticating every LoRa frame')
   p.add_argument('--identity', type=Path, default=storage.HOME / 'gateway')
-  p.add_argument('--interval', type=float, default=600.0, help='seconds between announces')
+  p.add_argument('--interval', type=float, default=3600.0, help='seconds between announces')
   p.add_argument('-v', '--verbose', action='store_true')
   a = p.parse_args()
   logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO)

@@ -297,11 +297,10 @@ def test_attached_identity_must_match_kid():
 def test_announce(suite):
   i = Identity.generate(suite)
   r = new_ratchet(i.kem_alg)
-  chain = M.HashChain(8)
-  data = M.make_announce(i, r, {'name': 'alice'}, chain=chain)
+  data = M.make_announce(i, r, {'name': 'alice'})
   ann = M.verify_announce(data, i.address)
   assert ann.identity == i.public() and ann.app_data == {'name': 'alice'} and ann.full
-  assert ann.ratchet.pub == r.pub and ann.chain == (chain.anchor, 8)
+  assert ann.ratchet.pub == r.pub
 
 
 def test_short_announce_needs_the_keyset():
@@ -350,38 +349,6 @@ def test_announce_needs_a_ratchet():
   body = cbor.dumps({M.A_IDENTITY: i.public_bytes, M.A_SEQUENCE: 1})
   with pytest.raises(CoseError, match='ratchet'):
     M.verify_announce(i.sign(body), i.address)
-
-
-# --- keepalive chains ---
-
-
-def test_hash_chain_links_back_to_the_anchor():
-  c = M.HashChain(10)
-  last_i, last_v = 0, c.anchor
-  for _ in range(10):
-    i, v = c.next()
-    assert M.check_keepalive(last_i, last_v, i, v, 10)
-    last_i, last_v = i, v
-  assert c.next() is None
-
-
-def test_keepalive_rejects_replay_forgery_and_big_jumps():
-  c = M.HashChain(1000)
-  i1, v1 = c.next()
-  assert not M.check_keepalive(0, c.anchor, 0, c.anchor, 1000)  # replay of the anchor
-  assert not M.check_keepalive(1, v1, 1, v1, 1000)  # replay of the last one
-  assert not M.check_keepalive(1, v1, 2, b'\x00' * 32, 1000)  # made up
-  assert M.check_keepalive(0, c.anchor, 5, c.value(5), 1000)  # missed a few: fine
-  assert not M.check_keepalive(
-    0, c.anchor, M.MAX_CHAIN_SKIP + 1, c.value(M.MAX_CHAIN_SKIP + 1), 1000
-  )
-  assert not M.check_keepalive(0, c.anchor, 1001, c.seed, 1000)  # past the end
-
-
-def test_keepalive_packet_is_small():
-  c = M.HashChain()
-  p = P.Packet(P.KEEPALIVE, 0, b'\x01' * 16, None, M.keepalive_payload(1790000000000, *c.next()))
-  assert len(p.encode()) < 80
 
 
 # --- packets ---

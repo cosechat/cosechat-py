@@ -22,26 +22,20 @@ An announce is a signed statement "this identity is here, and this is its
 ratchet":
 
   COSE_Sign1 / COSE_Sign over CBOR map
-    {1: public keyset (only in *full* announces), 2: sequence, 3: nonce,
-     4: app data, 5: ratchet COSE_Key, 6: [keepalive chain anchor, chain length]}
+    {1: public keyset (only in *full* announces), 2: sequence, 4: app data, 5: ratchet COSE_Key}
 
 A *short* announce leaves out the keyset: receivers that already hold it
 (pinned from an earlier full announce, or fetched by address) verify with it.
 The keyset hashes to the address, so it can come from anyone.
 
-The sequence only orders one identity's own announces (the reference uses
-Unix milliseconds, but a device with no clock can use a counter). It is never
-compared with the local clock.
-
-A *keepalive* says "still here, same keys and ratchet" for ~50 bytes: it
-reveals the next value of a SHA-256 hash chain whose anchor was in the last
-signed announce. Only the identity knows the chain's earlier values, and a
-hash chain needs no signature, so it is quantum-safe.
+The sequence grows with every announce, which also makes every announce
+unique (for duplicate filtering). It only orders one identity's own announces
+(the reference uses Unix milliseconds, but a device with no clock can use a
+counter), and is never compared with the local clock.
 """
 
 import hashlib
 import hmac
-import os
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -64,14 +58,8 @@ RECEIPT_TAG_SIZE = 16
 
 A_IDENTITY = 1
 A_SEQUENCE = 2
-A_NONCE = 3
 A_APP_DATA = 4
 A_RATCHET = 5
-A_CHAIN = 6
-
-CHAIN_VALUE_SIZE = 32
-CHAIN_LENGTH = 1024  # keepalives per signed announce
-MAX_CHAIN_SKIP = 256  # a receiver checks at most this many missed keepalives
 
 # unprotected Sign1/Sign header carrying the sender's public keyset, so a
 # recipient that never saw the sender's announce can still verify
@@ -327,10 +315,8 @@ class KeysetNeeded(CoseError):
 class Announce:
   identity: Identity
   sequence: int
-  nonce: bytes
   ratchet: Key
   app_data: Any = None
-  chain: tuple[bytes, int] | None = None  # (anchor, length) for keepalives
   full: bool = True  # carried its keyset
 
   @property
@@ -343,25 +329,19 @@ def make_announce(
   ratchet: Key,
   app_data: Any = None,
   sequence: int | None = None,
-  chain: 'HashChain | None' = None,
   full: bool = True,
 ) -> bytes:
   """
   `sequence` must grow with each announce of this identity (default: Unix ms).
   full=False leaves out the keyset (receivers must already have it).
   """
-  body = {
-    A_SEQUENCE: now_ms() if sequence is None else sequence,
-    A_NONCE: os.urandom(8),
-  }
+  body = {A_SEQUENCE: now_ms() if sequence is None else sequence}
   if full:
     body[A_IDENTITY] = identity.public_bytes
   if app_data is not None:
     body[A_APP_DATA] = app_data
   check_ratchet(ratchet)
   body[A_RATCHET] = ratchet.public().to_cose()
-  if chain is not None:
-    body[A_CHAIN] = [chain.anchor, chain.length]
   return identity.sign(cbor.dumps(body))
 
 
@@ -410,77 +390,4 @@ def verify_announce(
   seq = body.get(A_SEQUENCE, 0)
   if not isinstance(seq, int) or seq < 0:
     raise CoseError('announce sequence must be an unsigned integer')
-  chain = body.get(A_CHAIN)
-  if chain is not None:
-    if not (
-      isinstance(chain, list)
-      and len(chain) == 2
-      and isinstance(chain[0], bytes)
-      and len(chain[0]) == CHAIN_VALUE_SIZE
-      and isinstance(chain[1], int)
-      and chain[1] > 0
-    ):
-      raise CoseError('bad keepalive chain in announce')
-    chain = (chain[0], chain[1])
-  return Announce(
-    ident, seq, body.get(A_NONCE, b''), ratchet, body.get(A_APP_DATA), chain, pub is not None
-  )
-
-
-# --- keepalives (hash chain) ---
-
-
-def chain_step(value: bytes) -> bytes:
-  return hashlib.sha256(b'cosiechat chain' + value).digest()
-
-
-class HashChain:
-  """
-  value(0) is the anchor (published in a signed announce); value(i) is
-  revealed by the i-th keepalive, and chain_step(value(i)) == value(i - 1).
-  """
-
-  def __init__(self, length: int = CHAIN_LENGTH, seed: bytes | None = None):
-    self.seed = seed or os.urandom(CHAIN_VALUE_SIZE)
-    self.length = length
-    self.index = 0  # last value handed out
-    self.anchor = self.value(0)
-
-  def value(self, i: int) -> bytes:
-    v = self.seed
-    for _ in range(self.length - i):
-      v = chain_step(v)
-    return v
-
-  def next(self) -> tuple[int, bytes] | None:
-    if self.index >= self.length:
-      return None
-    self.index += 1
-    return self.index, self.value(self.index)
-
-
-def keepalive_payload(sequence: int, index: int, value: bytes) -> bytes:
-  return cbor.dumps([sequence, index, value])
-
-
-def parse_keepalive(payload: bytes) -> tuple[int, int, bytes]:
-  try:
-    seq, index, value = cbor.loads(payload)
-  except Exception:
-    raise CoseError('bad keepalive') from None
-  if not (isinstance(seq, int) and isinstance(index, int) and isinstance(value, bytes)):
-    raise CoseError('bad keepalive')
-  return seq, index, value
-
-
-def check_keepalive(
-  last_index: int, last_value: bytes, index: int, value: bytes, length: int
-) -> bool:
-  """Is `value` the chain value at `index`, given the last one we accepted?"""
-  steps = index - last_index
-  if steps <= 0 or steps > MAX_CHAIN_SKIP or index > length or len(value) != CHAIN_VALUE_SIZE:
-    return False
-  v = value
-  for _ in range(steps):
-    v = chain_step(v)
-  return hmac.compare_digest(v, last_value)
+  return Announce(ident, seq, ratchet, body.get(A_APP_DATA), pub is not None)

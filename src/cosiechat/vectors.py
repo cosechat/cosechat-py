@@ -189,14 +189,12 @@ def generate() -> dict:
     )
     out['messages'].append(message('Encrypt', ['bob', 'carol'], sealed, m, True))
 
-    chain = M.HashChain(16, seed=bytes(range(32)))
     for full in (True, False):
       ann = M.make_announce(
         alice,
         ratchets['alice'],
         {'name': 'alice'},
         sequence=1700000000003,
-        chain=chain,
         full=full,
       )
       out['announces'].append(
@@ -210,14 +208,7 @@ def generate() -> dict:
             'sequence': 1700000000003,
             'app_data_cbor': _hex(cbor.dumps({'name': 'alice'})),
             'ratchet_id': _hex(ratchets['alice'].kid),
-            'chain_anchor': _hex(chain.anchor),
-            'chain_length': chain.length,
           },
-          # keepalive values that must check out against the anchor, in order
-          'keepalives': [
-            {'index': i, 'payload': _hex(M.keepalive_payload(1700000000003, i, chain.value(i)))}
-            for i in (1, 2, 5)
-          ],
         }
       )
     pkt = P.Packet(P.ANNOUNCE, 0, alice.address, None, ann)
@@ -253,12 +244,12 @@ def generate() -> dict:
         'messages': [
           {
             'from': 'initiator',
-            'data': _hex(L.seal(ka, L.message_body(b.address, 'hi over the link'))),
+            'data': _hex(L.seal(ka, L.message_body('hi over the link'))),
             'content': 'hi over the link',
           },
           {
             'from': 'responder',
-            'data': _hex(L.seal(kb, L.message_body(a.address, 'and back'))),
+            'data': _hex(L.seal(kb, L.message_body('and back'))),
             'content': 'and back',
           },
         ],
@@ -384,38 +375,17 @@ def _rejects() -> list[dict]:
     ('ratchet that is not a KEM key', not_kem, False),
     ('ratchet carrying its private key', new_ratchet(alice.kem_alg), True),
   ):
-    b = {M.A_IDENTITY: alice.public_bytes, M.A_SEQUENCE: 12, M.A_NONCE: b'\x00' * 8}
+    b = {M.A_IDENTITY: alice.public_bytes, M.A_SEQUENCE: 12}
     b[M.A_RATCHET] = rk.to_cose(private=as_private)
     announce(name, 'an announced ratchet is a public HPKE key carrying its own id',
              alice.sign(cbor.dumps(b)), alice.address)  # fmt: skip
-  no_ratchet = {M.A_IDENTITY: alice.public_bytes, M.A_SEQUENCE: 13, M.A_NONCE: b'\x00' * 8}
+  no_ratchet = {M.A_IDENTITY: alice.public_bytes, M.A_SEQUENCE: 13}
   announce(
     'announce without a ratchet',
     'an announce must carry a ratchet',
     alice.sign(cbor.dumps(no_ratchet)),
     alice.address,
   )
-
-  chain = M.HashChain(16)
-  chain_ann = M.make_announce(alice, ra, sequence=20, chain=chain)
-  for name, index, value, last in (
-    ('keepalive replay', 3, chain.value(3), 3),
-    ('keepalive with a made-up value', 4, b'\x00' * 32, 3),
-    ('keepalive past the end of its chain', 17, chain.seed, 0),
-    ('keepalive for another announce', 1, chain.value(1), 0),
-  ):
-    seq = 19 if name == 'keepalive for another announce' else 20
-    out.append(
-      {
-        'kind': 'keepalive',
-        'name': name,
-        'rule': 'a keepalive must reveal a later value of the chain anchored in the announce it names',
-        'announce': _hex(chain_ann),
-        'last_index': last,
-        'last_value': _hex(chain.value(last)),
-        'data': _hex(M.keepalive_payload(seq, index, value)),
-      }
-    )
 
   for name, frame in (
     ('future protocol version', cbor.dumps([1, P.DATA, 0, b'\x01' * 16, None, b''])),
@@ -548,18 +518,9 @@ def check(vectors: dict) -> list[str]:
         a.sequence == e['sequence']
         and a.full == v.get('full', True)
         and a.ratchet.kid.hex() == e['ratchet_id']
-        and cbor.dumps(a.app_data) == bytes.fromhex(e['app_data_cbor'])
-        and a.chain == (bytes.fromhex(e['chain_anchor']), e['chain_length']),
+        and cbor.dumps(a.app_data) == bytes.fromhex(e['app_data_cbor']),
         what,
       )
-      last_index, last_value = 0, a.chain[0]
-      for ka in v.get('keepalives', []):
-        seq, index, value = M.parse_keepalive(bytes.fromhex(ka['payload']))
-        ok = seq == a.sequence and M.check_keepalive(
-          last_index, last_value, index, value, a.chain[1]
-        )
-        expect(ok and index == ka['index'], f'{what} keepalive {ka["index"]}')
-        last_index, last_value = index, value
     except Exception as e:
       fails.append(f'{what}: {e!r}')
 
@@ -642,15 +603,6 @@ def _accepted(v: dict) -> bool:
         prev = M.verify_announce(bytes.fromhex(v['previous']), bytes.fromhex(v['address']))
         return a.sequence >= prev.sequence
       return True
-    if kind == 'keepalive':
-      ann = M.verify_announce(bytes.fromhex(v['announce']))
-      seq, index, value = M.parse_keepalive(data)
-      if seq != ann.sequence:
-        return False
-      last_value = bytes.fromhex(v['last_value'])
-      if v['last_index'] == 0 and last_value != ann.chain[0]:
-        return False
-      return M.check_keepalive(v['last_index'], last_value, index, value, ann.chain[1])
     if kind == 'packet':
       P.decode(data)
       return True

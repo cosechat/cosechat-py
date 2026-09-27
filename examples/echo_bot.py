@@ -35,7 +35,7 @@ async def main():
   p.add_argument('--peer', action='append', type=hostport, help='unicast peer (default: broadcast)')
   p.add_argument('--identity', type=Path, default=storage.HOME / 'echo-bot')
   p.add_argument('--name', default='echo-bot')
-  p.add_argument('--interval', type=float, default=30.0, help='seconds between announces')
+  p.add_argument('--interval', type=float, default=1800.0, help='seconds between announces')
   p.add_argument('-v', '--verbose', action='store_true')
   a = p.parse_args()
   logging.basicConfig(level=logging.DEBUG if a.verbose else logging.WARNING)

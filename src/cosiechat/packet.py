@@ -6,7 +6,7 @@ Packets: what travels on a road.
              drop frames with a version they do not implement
     type     0 ANNOUNCE, 1 DATA, 2 PATH_REQUEST, 4 RECEIPT,
              5 LINK_REQUEST, 6 LINK_ACCEPT, 7 LINK_DATA,
-             8 KEEPALIVE, 9 KEYSET_REQUEST, 10 KEYSET
+             8 KEYSET_REQUEST, 9 KEYSET
     hops     hops already travelled (originator sends 0)
     dest     16-byte destination address
     via      16-byte address of the transport node that should forward this, or null
@@ -43,9 +43,8 @@ RECEIPT = 4
 LINK_REQUEST = 5
 LINK_ACCEPT = 6
 LINK_DATA = 7
-KEEPALIVE = 8
-KEYSET_REQUEST = 9
-KEYSET = 10
+KEYSET_REQUEST = 8
+KEYSET = 9
 
 TYPES = {
   ANNOUNCE: 'ANNOUNCE',
@@ -55,7 +54,6 @@ TYPES = {
   LINK_REQUEST: 'LINK_REQUEST',
   LINK_ACCEPT: 'LINK_ACCEPT',
   LINK_DATA: 'LINK_DATA',
-  KEEPALIVE: 'KEEPALIVE',
   KEYSET_REQUEST: 'KEYSET_REQUEST',
   KEYSET: 'KEYSET',
 }

@@ -40,7 +40,6 @@ from .packet import (
   ANNOUNCE,
   DATA,
   FRAGMENT_OVERHEAD,
-  KEEPALIVE,
   KEYSET,
   KEYSET_REQUEST,
   LINK_ACCEPT,
@@ -68,7 +67,7 @@ class Path:
   via: bytes | None
   hops: int
   sequence: int  # the announce's sequence (ordering only)
-  updated: float  # local monotonic clock, informational
+  expires: float  # local monotonic clock
 
   @property
   def road(self) -> Road:
@@ -168,7 +167,7 @@ class Node:
     retry_max: float = 600.0,
     max_attempts: int = 4,
     accept_links: bool = True,
-    keepalive_chain: int = msg.CHAIN_LENGTH,
+    path_ttl: float = 7 * 86400,
     announce_cap: float = 0.02,
     announce_queue_age: float = 3600.0,
     rebroadcast_min_interval: float = 60.0,
@@ -206,9 +205,6 @@ class Node:
     # forward secrecy beyond restarts.
     self.ratchets = ratchets if ratchets is not None else MemoryRatchets(self.identity.kem_alg)
     self.peer_ratchets: dict[bytes, Key] = {}
-    # keepalives: our current hash chain, and the last value accepted per peer
-    self._chain: msg.HashChain | None = None
-    self._peer_chains: dict[bytes, list] = {}  # addr -> [sequence, length, index, value]
     # short announces waiting for a keyset, and keyset requests we forwarded
     self._need_keyset: dict[bytes, tuple[_Lane, Packet]] = {}
     self._keyset_asked: dict[bytes, set] = {}
@@ -225,7 +221,9 @@ class Node:
     self._delivered: OrderedDict[bytes, None] = OrderedDict()  # message ids we handed over
     # links (sessions, see link.py): live in memory only, closed explicitly
     self.accept_links = accept_links
-    self.keepalive_chain = keepalive_chain
+    # a path is forgotten this long after the announce that made it (local
+    # monotonic clock; Reticulum uses a week). Any valid announce refreshes it.
+    self.path_ttl = path_ttl
     self.links: dict[bytes, L.LinkKeys] = {}  # link id -> keys
     self._link_to: dict[bytes, bytes] = {}  # peer address -> link id
     self._pending_links: dict[bytes, tuple[L.PendingLink, asyncio.Future]] = {}
@@ -319,7 +317,7 @@ class Node:
 
   async def announce(self, app_data: Any = None, full: bool | None = None):
     """
-    Signed announce with our current ratchet and a fresh keepalive chain.
+    Signed announce with our current ratchet.
     full: include our keyset. Default: only the first time since start (and
     when answering a path request for us); later announces are short.
     """
@@ -327,38 +325,29 @@ class Node:
       full = not self._announced
     self._announced = True
     self._sequence = max(msg.now_ms(), self._sequence + 1)
-    self._chain = msg.HashChain(self.keepalive_chain)
     data = msg.make_announce(
       self.identity,
       self.ratchets.current(),
       app_data if app_data is not None else self.app_data,
       sequence=self._sequence,
-      chain=self._chain,
       full=full,
     )
     p = Packet(ANNOUNCE, 0, self.address, None, data)
     self._mark_seen(p.hash)
     await self._broadcast(p)
 
-  async def keepalive(self):
-    """
-    "Still here, same keys": ~70 bytes instead of a signed announce. Falls
-    back to a (short) signed announce when there is no chain or it is used up.
-    """
-    step = self._chain.next() if self._chain else None
-    if step is None:
-      await self.announce()
-      return
-    p = Packet(KEEPALIVE, 0, self.address, None, msg.keepalive_payload(self._sequence, *step))
-    self._mark_seen(p.hash)
-    for lane in self.lanes:
-      if lane.road.online:
-        await lane.send(p)
-
   async def _broadcast_announce(self, p: Packet):
     for lane in self.lanes:
       if lane.road.online:
         await lane.announce(p)
+
+  def path(self, dest: bytes) -> Path | None:
+    """The current path to `dest`, or None (unknown, or expired: then it is forgotten)."""
+    p = self.paths.get(dest)
+    if p is not None and time.monotonic() >= p.expires:
+      del self.paths[dest]
+      return None
+    return p
 
   def peer_ratchet(self, address: bytes) -> Key | None:
     """The ratchet in the newest announce we accepted from `address`."""
@@ -375,7 +364,7 @@ class Node:
     self, address: bytes, timeout: float = 10.0, fresh: bool = False
   ) -> Identity | None:
     """Ask the mesh for `address`; resolves once its announce arrives (a new one if fresh)."""
-    if not fresh and address in self.paths and address in self.identities:
+    if not fresh and self.path(address) and address in self.identities:
       return self.identities[address]
     fut = asyncio.get_running_loop().create_future()
     self._waiters.setdefault(address, []).append(fut)
@@ -436,7 +425,7 @@ class Node:
     if isinstance(t, Identity):
       self.identities.setdefault(t.address, t.public())
       t = t.address
-    if t not in self.paths:
+    if self.path(t) is None:
       # no route yet: ask the mesh; without one we still flood to neighbours
       # and propagation nodes
       await self.request_path(t, timeout)
@@ -500,7 +489,7 @@ class Node:
     keys = self.link_to(address)
     if keys is None:
       return
-    body = L.message_body(address, close=True)
+    body = L.message_body(close=True)
     await self._send_data(address, L.seal(keys, body), LINK_DATA)
     self._drop_link(keys.link_id)
 
@@ -519,7 +508,7 @@ class Node:
   async def _send_on_link(self, addr, content, title, fields, receipt) -> msg.Message:
     keys = self.link_to(addr)
     secret = os.urandom(msg.RECEIPT_SECRET_SIZE) if receipt else None
-    body = L.message_body(addr, content, title, fields, secret)
+    body = L.message_body(content, title, fields, secret)
     m, _ = L.read_message(keys, addr, body)
     m.sender = self.address
 
@@ -578,7 +567,7 @@ class Node:
         await lane.send(p)
 
   async def _send_data(self, dest: bytes, payload: bytes, type: int = DATA):
-    path = self.paths.get(dest)
+    path = self.path(dest)
     p = Packet(type, 0, dest, path.via if path else None, payload)
     self._mark_seen(p.hash)
     if path:
@@ -631,8 +620,6 @@ class Node:
       self._handle_data(lane, item)
     elif item.type == PATH_REQUEST:
       self._handle_path_request(lane, item)
-    elif item.type == KEEPALIVE:
-      self._handle_keepalive(lane, item)
     elif item.type == KEYSET_REQUEST:
       self._handle_keyset_request(lane, item)
     elif item.type == KEYSET:
@@ -683,17 +670,13 @@ class Node:
     self.identities[p.dest] = ann.identity
     self.announces[p.dest] = (p.payload, ann)
     self.peer_ratchets[p.dest] = ann.ratchet
-    if ann.chain:
-      self._peer_chains[p.dest] = [ann.sequence, ann.chain[1], 0, ann.chain[0]]
-    else:
-      self._peer_chains.pop(p.dest, None)
     path = self._update_path(lane, p, ann.sequence)
     for cb in self._announce_handlers:
       self._call(cb, ann, path)
-    self._rebroadcast(p, ANNOUNCE)
+    self._rebroadcast(p)
 
   def _update_path(self, lane: _Lane, p: Packet, sequence: int) -> Path:
-    path = Path(lane, p.via, p.hops + 1, sequence, time.monotonic())
+    path = Path(lane, p.via, p.hops + 1, sequence, time.monotonic() + self.path_ttl)
     self.paths[p.dest] = path
     for fut in self._waiters.pop(p.dest, []):
       if not fut.done():
@@ -702,40 +685,22 @@ class Node:
       self._spawn(path.lane.send(Packet(kind, 0, p.dest, path.via, payload)))
     return path
 
-  def _rebroadcast(self, p: Packet, kind: int):
-    """Transport nodes pass announces and keepalives on, at most once per interval per identity."""
+  def _rebroadcast(self, p: Packet):
+    """Transport nodes pass announces on, at most once per interval per identity."""
     if not self.transport or p.hops + 1 >= self.max_hops:
       return
     now = time.monotonic()
-    key = (kind, p.dest)
-    if now < self._rebroadcast_at.get(key, 0.0):
+    if now < self._rebroadcast_at.get(p.dest, 0.0):
       log.debug('%s: not rebroadcasting %s again so soon', self, p.dest.hex())
       return
-    self._rebroadcast_at[key] = now + self.rebroadcast_min_interval
-    fwd = Packet(kind, p.hops + 1, p.dest, self.address, p.payload)
-    if kind == ANNOUNCE:
-      self._spawn(self._delayed(self._broadcast, fwd))
-    else:
-      self._spawn(self._delayed(self._send_all, fwd))
+    self._rebroadcast_at[p.dest] = now + self.rebroadcast_min_interval
+    fwd = Packet(ANNOUNCE, p.hops + 1, p.dest, self.address, p.payload)
+    self._spawn(self._delayed(self._broadcast, fwd))
 
   async def _send_all(self, p: Packet):
     for lane in self.lanes:
       if lane.road.online:
         await lane.send(p)
-
-  def _handle_keepalive(self, lane: _Lane, p: Packet):
-    state = self._peer_chains.get(p.dest)
-    if state is None or p.dest == self.address:
-      return
-    try:
-      seq, index, value = msg.parse_keepalive(p.payload)
-    except Exception:
-      return
-    if seq != state[0] or not msg.check_keepalive(state[2], state[3], index, value, state[1]):
-      return
-    state[2], state[3] = index, value
-    self._update_path(lane, p, seq)
-    self._rebroadcast(p, KEEPALIVE)
 
   def _request_keyset(self, address: bytes):
     now = time.monotonic()
@@ -798,13 +763,13 @@ class Node:
     if p.via == self.address:
       self._forward(p)
     elif p.via is None and self.propagate:
-      path = self.paths.get(p.dest)
+      path = self.path(p.dest)
       if path and path.lane is lane and path.via is None:
         return  # destination is a neighbour on this road and already heard it
       self._forward(p)
 
   def _forward(self, p: Packet):
-    path = self.paths.get(p.dest)
+    path = self.path(p.dest)
     if path is None:
       if self.propagate:
         q = self.pending.setdefault(p.dest, [])
@@ -824,7 +789,7 @@ class Node:
     if not self.transport:
       return
     cached = self.announces.get(p.dest)
-    path = self.paths.get(p.dest)
+    path = self.path(p.dest)
     if cached and path:
       resp = Packet(ANNOUNCE, path.hops, p.dest, self.address, cached[0])
       self._spawn(self._delayed(lane.announce, resp))

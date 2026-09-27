@@ -19,7 +19,8 @@ each message is a symmetric COSE_Encrypt0 with ~40 bytes of overhead.
 
   link message:
     link id (16) || COSE_Encrypt0(direction key, random IV) of the message body
-    (the same CBOR map a sealed message signs)
+    (the same CBOR map a sealed message signs, without `to`: the link keys
+    already bind both parties and the direction)
 
 Why it holds:
   * A is authenticated by its signature, which also binds A's ephemeral key
@@ -177,14 +178,14 @@ def unseal(keys: LinkKeys, payload: bytes) -> bytes:
 
 
 def message_body(
-  to: bytes,
   content='',
   title: str = '',
   fields: dict | None = None,
   receipt_secret: bytes | None = None,
   close: bool = False,
 ) -> bytes:
-  body = {msg.M_TO: [to], msg.M_TIME: msg.now_ms()}
+  # no `to`: the link keys already bind the two parties and the direction
+  body = {msg.M_TIME: msg.now_ms()}
   if title:
     body[msg.M_TITLE] = title
   if content not in ('', b'', None):
@@ -203,12 +204,9 @@ def read_message(keys: LinkKeys, me: bytes, body_bytes: bytes) -> tuple[msg.Mess
   body = cbor.loads(body_bytes)
   if not isinstance(body, dict):
     raise CoseError('bad link message')
-  to = body.get(msg.M_TO, [])
-  if me not in to:
-    raise CoseError('link message not addressed to us')
   m = msg.Message(
     keys.peer,
-    to,
+    [me],
     body.get(msg.M_TIME, 0),
     body.get(msg.M_TITLE, ''),
     body.get(msg.M_CONTENT, ''),

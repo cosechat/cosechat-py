@@ -23,9 +23,9 @@ and runnable examples (including a UDP echo bot) are in [examples/](examples/).
   signing keys. Each node announces a post-quantum ratchet key (X-Wing) that
   messages are sealed to; rotating it gives forward secrecy (like Reticulum's
   ratchets, but required).
-* **Small announces.** Full announces on first contact, short ones after (no
-  keyset), and 69-byte hash-chain keepalives in between. Sizes: SPEC §14, or
-  `cosiechat sizes`.
+* **Small announces, sent rarely.** The keyset goes only in first-contact
+  announces and path-request answers; paths last a week, like Reticulum.
+  Sizes: SPEC §14, or `cosiechat sizes`.
 * **Storage is yours.** The library does no file I/O and trusts no dates: how
   keys are stored, encrypted at rest, rotated and deleted is the application's
   call. [examples/storage.py](examples/storage.py) shows a suggested practice.
