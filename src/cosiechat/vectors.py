@@ -167,10 +167,21 @@ def generate() -> dict:
     fields = {1: b'\x00\x01\x02', 'k': 'v'}
     # the normal case: one recipient, sealed to their announced ratchet
     rks = {bob.address: ratchets['bob'].public(), carol.address: ratchets['carol'].public()}
+    secret = bytes(range(16))
     sealed, m = M.seal(
-      alice, [bob.public()], 'hi bob', 'one', fields, timestamp=1700000000000, ratchets=rks
+      alice,
+      [bob.public()],
+      'hi bob',
+      'one',
+      fields,
+      timestamp=1700000000000,
+      ratchets=rks,
+      receipt_secret=secret,
     )
-    out['messages'].append(message('Encrypt0', ['bob'], sealed, m, True, 'one', fields))
+    v = message('Encrypt0', ['bob'], sealed, m, True, 'one', fields)
+    # bob answers with this 16-byte tag (in a RECEIPT packet, plus an 8-byte nonce)
+    v['expect']['receipt_tags'] = {'bob': _hex(M.receipt_tag(secret, bob.address))}
+    out['messages'].append(v)
     # forward_secrecy=False: sealed to the long-term identity key
     sealed, m = M.seal(alice, [bob.public()], 'long-term key', timestamp=1700000000001)
     out['messages'].append(message('Encrypt0', ['bob'], sealed, m, False))
@@ -268,6 +279,13 @@ def check(vectors: dict) -> list[str]:
           require_ratchet=v.get('ratchet', False),
         )
         e = v['expect']
+        tags = e.get('receipt_tags', {})
+        if who in tags:
+          expect(
+            m.receipt_secret is not None
+            and M.receipt_tag(m.receipt_secret, ids[(v['suite'], who)].address).hex() == tags[who],
+            what + ' receipt tag',
+          )
         expect(
           (m.ratchet_id is not None) == v.get('ratchet', False)
           and m.id.hex() == e['id']

@@ -55,9 +55,10 @@ Known limits of cosiechat as it stands. The wire format is in
   destination addresses, packet sizes, timing, and hop counts. With road auth
   in `encrypt` mode, outsiders on that road see only sizes and timing.
   Announces are public by design.
-* **No replay protection for messages.** Duplicate packets are filtered by
-  hash in memory (up to 50,000), but that is lost on restart. Messages carry a
-  timestamp and a unique id; applications should dedupe by `Message.id`.
+* **Message dedupe is in memory.** A node hands each message id to the
+  application once, remembering the last 10,000 ids, and duplicate packets are
+  filtered by hash (up to 50,000). Both are lost on restart, so an
+  application that persists messages should also dedupe by `Message.id`.
 * **Key storage is the application's job.** The library does no file I/O.
   `examples/storage.py` shows one practice: files written atomically with
   mode 0600, and optionally encrypted at rest with a passphrase (scrypt, then
@@ -68,8 +69,14 @@ Known limits of cosiechat as it stands. The wire format is in
 * No links (sessions), delivery proofs, resources (large transfers),
   stamps/proof-of-work, propagation-node sync, or named destinations
   (app name + aspects).
-* **Fragments are not retransmitted.** A PQ announce is about 17 LoRa frames
-  and a PQ message about 10. Losing any one frame loses the whole packet.
+* **Retransmission is whole-message.** Receipts and resends (SPEC §9.1) make
+  delivery reliable, but losing any one fragment still loses that attempt. A
+  PQ message is about 10 LoRa frames, so at 5% frame loss only ~60% of
+  attempts get through, and at 10% about a third. Fragment-level resume
+  (resend only the missing frames) is on the TODO. Announces are not
+  retransmitted at all.
+* **Receipts in multi-recipient messages can be forged by the other
+  recipients**, since they all know the receipt secret.
 * Path expiry and path-quality selection are minimal: the first announce
   copy wins, and a newer announce replaces the path.
 * Store and forward is in memory only (64 messages per destination) and is

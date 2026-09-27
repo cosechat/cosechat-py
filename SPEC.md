@@ -209,7 +209,8 @@ body   = { 1: [recipient address, ...],   ; to (required)
            2: timestamp ms,               ; (required)
            3: title (tstr),               ; omitted when empty
            4: content (any, usually tstr),; omitted when empty
-           5: fields (map) }              ; omitted when empty (attachments etc.)
+           5: fields (map),               ; omitted when empty (attachments etc.)
+           6: receipt secret (bstr .size 16) } ; omitted when no receipt is wanted
 signed = identity signature over bstr(body)   ; COSE_Sign1 or COSE_Sign, protected kid = sender address
 sealed = COSE_Encrypt0, HPKE integrated, to the recipient's current ratchet (§7.1)
          unprotected kid = ratchet id
@@ -333,11 +334,12 @@ passphrase-encrypted at rest.
 ```
 packet = [ version, type, hops, dest, via, payload ]
   version uint, 0 for this draft
-  type    0 ANNOUNCE | 1 DATA | 2 PATH_REQUEST
+  type    0 ANNOUNCE | 1 DATA | 2 PATH_REQUEST | 4 RECEIPT
   hops    uint, hops travelled so far (originator sends 0)
   dest    bstr .size 16
   via     bstr .size 16 / null   the transport node that should forward it
   payload bstr   announce | sealed message | 8-byte random tag (path request)
+                 | receipt tag (16) || random nonce (8)
 
 packet hash = SHA-256(CBOR [version, type, dest, payload])   ; hops and via excluded
 ```
@@ -392,10 +394,39 @@ too) and a path table `dest → (road, via, hops, announce time)`.
   address: `hops + 1`, `via = our path.via`, send on our path's road.
   A propagation node also takes `via = null` DATA; with no path it holds the
   sealed payload and forwards it when the destination announces.
+* **RECEIPT** packets are routed exactly like DATA (including by
+  propagation nodes).
 * **PATH_REQUEST for dest:** the destination announces. A transport node with
   a path replies on the arrival road with the cached announce
   (`hops = path.hops`, `via = own address`); without one it rebroadcasts the
   request with `hops + 1`.
+
+### 9.1 Delivery receipts and retransmission
+
+A sender that wants confirmation puts a fresh random 16-byte **receipt
+secret** in the message body (field 6). A recipient that opened and verified
+the message MUST answer with a RECEIPT packet to the sender's address:
+
+```
+receipt tag = HMAC-SHA-256(key = secret, "cosiechat receipt" || recipient address)[0:16]
+payload     = receipt tag || 8 random bytes   ; the nonce gives every receipt a new packet hash
+```
+
+Only someone who decrypted the message knows the secret, so the tag proves
+delivery at 24 bytes, with no signature. The recipient MUST send a receipt
+every time it gets the message, even a repeat (its earlier receipt may have
+been lost). It MUST hand each message id to the application only once.
+
+Until the receipt arrives, the sender resends: the **same signed message** in
+a **fresh envelope** (new HPKE encapsulation, to the peer's newest ratchet).
+The message id stays the same, while the new packet hash gets past duplicate
+filters. Retry timing is local policy. The reference retries after 30 s,
+doubling up to 10 minutes, for 4 sends in all, using only its own event-loop
+clock.
+
+In a message with several recipients, every recipient knows the secret, so
+recipients could forge each other's receipts. That is acceptable for this
+extra (§6.1).
 
 ## 10. Roads
 

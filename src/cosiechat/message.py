@@ -32,6 +32,7 @@ compared with the local clock.
 """
 
 import hashlib
+import hmac
 import os
 import time
 from collections.abc import Callable, Iterable
@@ -48,6 +49,10 @@ M_TIME = 2
 M_TITLE = 3
 M_CONTENT = 4
 M_FIELDS = 5
+M_RECEIPT = 6  # random secret; proving we know it proves we opened the message
+
+RECEIPT_SECRET_SIZE = 16
+RECEIPT_TAG_SIZE = 16
 
 A_IDENTITY = 1
 A_SEQUENCE = 2
@@ -82,6 +87,8 @@ class Message:
   signed: bytes = b''
   # id of our ratchet it was sealed to (None: our long-term identity key)
   ratchet_id: bytes | None = None
+  # the sender wants a receipt: send receipt_tag(secret, our address) back
+  receipt_secret: bytes | None = None
 
   @property
   def time(self) -> float:
@@ -92,6 +99,11 @@ def message_id(signed: bytes) -> bytes:
   return hashlib.sha256(signed).digest()
 
 
+def receipt_tag(secret: bytes, recipient: bytes) -> bytes:
+  """What `recipient` sends back to show it opened the message carrying `secret`."""
+  return hmac.new(secret, b'cosiechat receipt' + recipient, 'sha256').digest()[:RECEIPT_TAG_SIZE]
+
+
 def sign_message(
   sender: Identity,
   recipients: list[Identity],
@@ -100,6 +112,7 @@ def sign_message(
   fields: dict | None = None,
   timestamp: int | None = None,
   attach_identity: bool = False,
+  receipt_secret: bytes | None = None,
 ) -> Message:
   """The signed layer only (a Message with .signed set); seal it with envelope()."""
   if not recipients:
@@ -114,6 +127,10 @@ def sign_message(
     body[M_CONTENT] = content
   if fields:
     body[M_FIELDS] = fields
+  if receipt_secret is not None:
+    if len(receipt_secret) != RECEIPT_SECRET_SIZE:
+      raise ValueError(f'receipt secret must be {RECEIPT_SECRET_SIZE} bytes')
+    body[M_RECEIPT] = receipt_secret
   u = {H_IDENTITY: sender.public_bytes} if attach_identity else None
   signed = sender.sign(cbor.dumps(body), unprotected=u)
   return Message(
@@ -125,6 +142,7 @@ def sign_message(
     fields or {},
     message_id(signed),
     signed,
+    receipt_secret=receipt_secret,
   )
 
 
@@ -146,13 +164,16 @@ def seal(
   attach_identity: bool = False,
   integrated: bool = True,
   ratchets: dict[bytes, Key] | None = None,
+  receipt_secret: bytes | None = None,
 ) -> tuple[bytes, Message]:
   """
   Sign and encrypt one sealed message for all recipients. Returns (sealed, message).
   One recipient gives COSE_Encrypt0 unless integrated=False; several share one
   COSE_Encrypt. `ratchets` maps recipient address -> their announced ratchet.
   """
-  m = sign_message(sender, recipients, content, title, fields, timestamp, attach_identity)
+  m = sign_message(
+    sender, recipients, content, title, fields, timestamp, attach_identity, receipt_secret
+  )
   ratchets = ratchets or {}
   if len(recipients) == 1 and integrated:
     return envelope(m.signed, recipients[0], ratchets.get(recipients[0].address)), m
@@ -175,6 +196,7 @@ def seal_each(
   timestamp: int | None = None,
   attach_identity: bool = False,
   ratchets: dict[bytes, Key] | None = None,
+  receipt_secret: bytes | None = None,
 ) -> tuple[dict[bytes, bytes], Message]:
   """
   Sign once, then one COSE_Encrypt0 per recipient: {address: sealed}. This is
@@ -182,7 +204,9 @@ def seal_each(
   smaller on the wire than a shared COSE_Encrypt, and each copy names only
   its own recipient's ratchet.
   """
-  m = sign_message(sender, recipients, content, title, fields, timestamp, attach_identity)
+  m = sign_message(
+    sender, recipients, content, title, fields, timestamp, attach_identity, receipt_secret
+  )
   ratchets = ratchets or {}
   return {r.address: envelope(m.signed, r, ratchets.get(r.address)) for r in recipients}, m
 
@@ -259,7 +283,12 @@ def unseal(
     message_id(signed),
     signed,
     rid,
+    _receipt_secret(body.get(M_RECEIPT)),
   )
+
+
+def _receipt_secret(v):
+  return v if isinstance(v, bytes) and len(v) == RECEIPT_SECRET_SIZE else None
 
 
 def attached_identity(signed: bytes) -> Identity | None:

@@ -91,11 +91,14 @@ Legend: [ ] todo, [~] in progress, [x] done
 1. [x] **Wire version.** Done: every frame is `[version, ...]`, VERSION = 0. Packets have no version. Add one (e.g. packet
    `[version, type, ...]` or a leading version byte) before other
    implementations ship. The PQ HPKE ids (56/57, 62–65) are still draft values.
-2. [ ] **Delivery receipts and retransmission.** A lost fragment silently loses
-   the packet; a 10-frame PQ message at 5% frame loss fails about 40% of the
-   time. Add a signed receipt (over the message id, sealed back to the sender),
-   resend on timeout, dedupe by message id, and consider fragment-level
-   ack/resume for LoRa.
+2. [x] **Delivery receipts and retransmission.** Done (SPEC §9.1): 24-byte
+   HMAC receipts from a secret in the message, re-sealed resends with backoff,
+   and app-level dedupe by message id. `node.delivered(m)`, `on_receipt`.
+2b. [ ] **Fragment-level resume for LoRa.** Resends are whole-message; a PQ
+   message is 10–20 LoRa frames, so at 10% frame loss most attempts fail.
+   Let the receiver ask for just the missing fragments (a NACK listing
+   indexes for a fragment id), or add FEC. `test_lossy_lora_road_still_delivers_once`
+   shows the problem.
 3. [ ] **Sessions (like Reticulum Links).** Each PQ message carries about 4.5 KB
    of fixed overhead (3.3 KB ML-DSA signature + 1.1 KB X-Wing). Handshake once
    (X-Wing to the peer's ratchet, signed both ways), then symmetric AEAD per

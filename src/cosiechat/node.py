@@ -14,11 +14,16 @@ Reticulum's Transport, reduced to its core ideas:
   * Propagation nodes (propagate=True) keep DATA for destinations they have
     no path to, and forward it once the destination announces. What they keep
     is the sealed COSE message, so it is encrypted at rest.
+  * Delivery: each message carries a random receipt secret. The recipient
+    answers with a tiny RECEIPT (an HMAC only someone who opened the message
+    can make). Until then the sender re-seals and resends with backoff.
+    Receivers hand each message id to the application once.
 """
 
 import asyncio
 import inspect
 import logging
+import os
 import random
 import time
 from collections import OrderedDict
@@ -34,6 +39,7 @@ from .packet import (
   DATA,
   FRAGMENT_OVERHEAD,
   PATH_REQUEST,
+  RECEIPT,
   Packet,
   PacketError,
   Reassembler,
@@ -58,6 +64,13 @@ class Path:
   @property
   def road(self) -> Road:
     return self.lane.road
+
+
+@dataclass
+class _Outgoing:
+  message: msg.Message
+  recipient: Identity
+  future: asyncio.Future
 
 
 class _Lane:
@@ -94,6 +107,9 @@ class Node:
     quantum_safe_only: bool = True,
     forward_secrecy: bool = True,
     ratchets: Ratchets | None = None,
+    retry_after: float = 30.0,
+    retry_max: float = 600.0,
+    max_attempts: int = 4,
     name: str | None = None,
   ):
     self.identity = identity or Identity.generate()
@@ -126,6 +142,14 @@ class Node:
     self.ratchets = ratchets
     self.peer_ratchets: dict[bytes, Key] = {}
     self._sequence = 0  # our announce sequence: Unix ms, but never going backwards
+    # delivery: resend after retry_after, doubling up to retry_max, max_attempts
+    # sends in all (timed by the local event loop clock only)
+    self.retry_after = retry_after
+    self.retry_max = retry_max
+    self.max_attempts = max_attempts
+    self._outbox: dict[bytes, _Outgoing] = {}  # receipt tag -> pending send
+    self._deliveries: OrderedDict[bytes, list[asyncio.Future]] = OrderedDict()
+    self._delivered: OrderedDict[bytes, None] = OrderedDict()  # message ids we handed over
     self.name = name or self.identity.address.hex()[:8]
 
     self.lanes: list[_Lane] = []
@@ -139,6 +163,7 @@ class Node:
     self._reassembler = Reassembler()
     self._message_handlers: list[Callable] = []
     self._announce_handlers: list[Callable] = []
+    self._receipt_handlers: list[Callable] = []
     self._waiters: dict[bytes, list[asyncio.Future]] = {}
     self._tasks: set[asyncio.Task] = set()
     self._running = False
@@ -190,6 +215,22 @@ class Node:
   def on_announce(self, cb: Callable[[msg.Announce, Path], Any]):
     self._announce_handlers.append(cb)
     return cb
+
+  def on_receipt(self, cb: Callable[[msg.Message, bytes], Any]):
+    """cb(message, recipient address) when a recipient confirms it opened a message."""
+    self._receipt_handlers.append(cb)
+    return cb
+
+  async def delivered(self, m: msg.Message, timeout: float | None = None) -> bool:
+    """True once every recipient sent a receipt; False if any gave up (or timeout)."""
+    futs = self._deliveries.get(m.id)
+    if not futs:
+      raise LookupError('not a message this node sent with receipts')
+    try:
+      results = await asyncio.wait_for(asyncio.gather(*futs), timeout)
+    except TimeoutError:
+      return False
+    return all(results)
 
   def known(self, address: bytes) -> Identity | None:
     return self.identities.get(address)
@@ -247,10 +288,13 @@ class Node:
     fields: dict | None = None,
     attach_identity: bool = False,
     timeout: float = 10.0,
+    receipt: bool = True,
   ) -> msg.Message:
     """
     Seal a message for one or more recipients (addresses or Identities) and
     send it. Unknown recipients are looked up with a path request first.
+    With receipt=True (default) it is resent until each recipient confirms;
+    await node.delivered(message) to find out.
     """
     targets = to if isinstance(to, (list, tuple)) else [to]
     recipients = []
@@ -276,19 +320,53 @@ class Node:
             '(or use forward_secrecy=False to send to its long-term key)'
           )
       recipients.append(ident)
-    ratchets = {r.address: self.peer_ratchet(r.address) for r in recipients}
-    sealed, m = msg.seal_each(
+    m = msg.sign_message(
       self.identity,
       recipients,
       content,
       title,
       fields,
       attach_identity=attach_identity,
-      ratchets={a: k for a, k in ratchets.items() if k is not None},
+      receipt_secret=os.urandom(msg.RECEIPT_SECRET_SIZE) if receipt else None,
     )
-    for addr, data in sealed.items():
-      await self._send_data(addr, data)
+    futs = []
+    for r in recipients:
+      await self._send_data(r.address, self._envelope(m, r))
+      if receipt:
+        o = _Outgoing(m, r, asyncio.get_running_loop().create_future())
+        self._outbox[msg.receipt_tag(m.receipt_secret, r.address)] = o
+        futs.append(o.future)
+        self._spawn(self._retry(o))
+    if receipt:
+      self._deliveries[m.id] = futs
+      while len(self._deliveries) > 1000:
+        self._deliveries.popitem(last=False)
     return m
+
+  def _envelope(self, m: msg.Message, r: Identity) -> bytes:
+    # every (re)send is a fresh envelope around the same signed message: a new
+    # packet hash gets past duplicate filters, and the newest ratchet is used
+    return msg.envelope(m.signed, r, self.peer_ratchet(r.address))
+
+  async def _retry(self, o: _Outgoing):
+    tag = msg.receipt_tag(o.message.receipt_secret, o.recipient.address)
+    wait = self.retry_after
+    try:
+      for attempt in range(1, self.max_attempts + 1):
+        try:
+          await asyncio.wait_for(asyncio.shield(o.future), wait)
+          return
+        except TimeoutError:
+          pass
+        if attempt == self.max_attempts:
+          break
+        log.debug('%s: resending %s to %s', self, o.message.id.hex()[:8], o.recipient.address.hex())
+        await self._send_data(o.recipient.address, self._envelope(o.message, o.recipient))
+        wait = min(wait * 2, self.retry_max)
+      if not o.future.done():
+        o.future.set_result(False)
+    finally:
+      self._outbox.pop(tag, None)
 
   # --- sending ---
 
@@ -308,9 +386,9 @@ class Node:
       if lane is not exclude and lane.road.online:
         await lane.send(p)
 
-  async def _send_data(self, dest: bytes, payload: bytes):
+  async def _send_data(self, dest: bytes, payload: bytes, type: int = DATA):
     path = self.paths.get(dest)
-    p = Packet(DATA, 0, dest, path.via if path else None, payload)
+    p = Packet(type, 0, dest, path.via if path else None, payload)
     self._mark_seen(p.hash)
     if path:
       await path.lane.send(p)
@@ -358,7 +436,7 @@ class Node:
     log.debug('%s: %r on %s', self, item, lane.road)
     if item.type == ANNOUNCE:
       self._handle_announce(lane, item)
-    elif item.type == DATA:
+    elif item.type in (DATA, RECEIPT):
       self._handle_data(lane, item)
     elif item.type == PATH_REQUEST:
       self._handle_path_request(lane, item)
@@ -402,12 +480,16 @@ class Node:
       fwd = Packet(ANNOUNCE, p.hops + 1, p.dest, self.address, p.payload)
       self._spawn(self._delayed(self._broadcast, fwd))
 
-    for payload in self.pending.pop(p.dest, []):
-      self._spawn(path.lane.send(Packet(DATA, 0, p.dest, path.via, payload)))
+    for kind, payload in self.pending.pop(p.dest, []):
+      self._spawn(path.lane.send(Packet(kind, 0, p.dest, path.via, payload)))
 
   def _handle_data(self, lane: _Lane, p: Packet):
+    """DATA and RECEIPT: take it if it is ours, else forward like any payload."""
     if p.dest == self.address:
-      self._deliver(p)
+      if p.type == RECEIPT:
+        self._handle_receipt(p)
+      else:
+        self._deliver(p)
       return
     if not self.transport:
       return
@@ -425,12 +507,12 @@ class Node:
       if self.propagate:
         q = self.pending.setdefault(p.dest, [])
         if len(q) < self.max_pending:
-          q.append(p.payload)
+          q.append((p.type, p.payload))
           log.debug('%s: holding %r for later', self, p)
       return
     if p.hops + 1 >= self.max_hops:
       return
-    self._spawn(path.lane.send(Packet(DATA, p.hops + 1, p.dest, path.via, p.payload)))
+    self._spawn(path.lane.send(Packet(p.type, p.hops + 1, p.dest, path.via, p.payload)))
 
   def _handle_path_request(self, lane: _Lane, p: Packet):
     if p.dest == self.address:
@@ -464,8 +546,25 @@ class Node:
       log.debug('%s: dropped message from non-quantum-safe %s', self, m.sender.hex())
       return
     self.identities.setdefault(m.sender, sender)
+    if m.receipt_secret is not None:
+      # always answer, even for a repeat: our last receipt may have been lost
+      tag = msg.receipt_tag(m.receipt_secret, self.address)
+      self._spawn(self._send_data(m.sender, tag + os.urandom(8), RECEIPT))
+    if m.id in self._delivered:
+      return
+    self._delivered[m.id] = None
+    if len(self._delivered) > 10000:
+      self._delivered.popitem(last=False)
     for cb in self._message_handlers:
       self._call(cb, m)
+
+  def _handle_receipt(self, p: Packet):
+    o = self._outbox.pop(p.payload[: msg.RECEIPT_TAG_SIZE], None)
+    if o is None or o.future.done():
+      return
+    o.future.set_result(True)
+    for cb in self._receipt_handlers:
+      self._call(cb, o.message, o.recipient.address)
 
   def _call(self, cb, *args):
     try:

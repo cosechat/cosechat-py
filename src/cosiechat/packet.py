@@ -4,12 +4,12 @@ Packets: what travels on a road.
   packet   = [version, type, hops, dest, via, payload]
     version  protocol version, VERSION (0 while the spec is a draft); receivers
              drop frames with a version they do not implement
-    type     0 ANNOUNCE, 1 DATA, 2 PATH_REQUEST
+    type     0 ANNOUNCE, 1 DATA, 2 PATH_REQUEST, 4 RECEIPT
     hops     hops already travelled (originator sends 0)
     dest     16-byte destination address
     via      16-byte address of the transport node that should forward this, or null
     payload  bstr: announce (COSE_Sign1/Sign), sealed message (COSE_Encrypt0/Encrypt),
-             or a random tag for path requests
+             a random tag for path requests, or receipt tag || nonce
 
   fragment = [version, 3, id, index, count, chunk]
     Roads with a small MTU (LoRa) carry big packets (PQ keys and signatures
@@ -37,8 +37,9 @@ ANNOUNCE = 0
 DATA = 1
 PATH_REQUEST = 2
 FRAGMENT = 3
+RECEIPT = 4
 
-TYPES = {ANNOUNCE: 'ANNOUNCE', DATA: 'DATA', PATH_REQUEST: 'PATH_REQUEST'}
+TYPES = {ANNOUNCE: 'ANNOUNCE', DATA: 'DATA', PATH_REQUEST: 'PATH_REQUEST', RECEIPT: 'RECEIPT'}
 
 FRAGMENT_ID_SIZE = 8
 # array(1) + version(1) + type(1) + id(1+8) + index(3) + count(3) + chunk header(3)
