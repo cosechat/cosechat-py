@@ -16,7 +16,15 @@ all = ['websockets>=13', 'pyserial>=3.5']
 cosiechat = 'cosiechat.cli:main'
 
 [dependency-groups]
-dev = ['pytest>=8', 'ruff>=0.6', 'pycose>=1.1', 'cwt>=3', 'websockets>=13', 'pyserial>=3.5']
+dev = [
+    'pytest>=8',
+    'ruff>=0.6',
+    'pycose>=1.1',
+    'cwt>=3',
+    'websockets>=13',
+    'pyserial>=3.5',
+    "pycddl>=0.6.4",
+]
 
 [build-system]
 requires = ['hatchling']

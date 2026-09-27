@@ -129,9 +129,10 @@ Legend: [ ] todo, [~] partly done
 
 ### B. Needed for SPEC.md to be the porting guide
 
-9. [ ] **CDDL** for every structure: packet, fragment, keyset, announce body,
-   ratchet key, message body, receipt, link request/accept/message, keyset
-   request/answer.
+9. [x] **CDDL.** Done: `cosiechat.cddl` (embedded in SPEC §15), validated
+   with pycddl against real encodings and every frame of a live mesh
+   (`tests/test_cddl.py`). pycddl 0.6 mis-handles `.cbor` inside arrays, so
+   the test loosens the protected-header rule and checks headers itself.
 10. [ ] **Constants and defaults table:** every number an implementation needs
     (sizes, limits, retry/backoff, budgets, TTLs, caps like 16 trial
     ratchets, 256 kept accepts), marked MUST vs local policy.

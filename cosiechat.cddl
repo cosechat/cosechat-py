@@ -1,0 +1,126 @@
+; cosiechat wire format, protocol version 0 (draft). CDDL: RFC 8610.
+; Checked against real encodings by tests/test_cddl.py.
+; Everything is deterministically encoded CBOR (RFC 8949 4.2.1).
+
+; ---------------------------------------------------------------------------
+; frames: what one road send carries
+
+frame = packet / fragment / nack / road-mac / road-encrypt
+
+version = 0
+address = bstr .size 16
+
+packet = [
+  version: version,
+  type: packet-type,
+  hops: uint,               ; hops travelled so far; the originator sends 0
+  dest: address,
+  via: address / null,      ; the transport node that should forward it
+  payload: bstr,            ; see "payloads" below, by type
+]
+
+packet-type = 0 / 1 / 2 / 4 / 5 / 6 / 7 / 8 / 9
+; 0 announce, 1 data, 2 path request, 4 receipt, 5 link request, 6 link accept,
+; 7 link data, 8 keyset request, 9 keyset (3 and 10 are fragment and nack frames)
+
+fragment = [version: version, 3, id: fragment-id, index: uint, count: uint, chunk: bstr]
+nack = [version: version, 10, id: fragment-id, missing: [* uint]]
+fragment-id = bstr .size 8
+
+; with a road key every frame is wrapped (payload / plaintext = one frame above)
+road-mac = COSE_Mac0_Tagged                ; HMAC 256/256
+road-encrypt = COSE_Encrypt0_Tagged        ; A256GCM
+
+; ---------------------------------------------------------------------------
+; payloads, by packet type (each is the packet's payload bstr)
+
+announce-payload = bstr .cbor signed      ; its payload: bstr .cbor announce-body
+data-payload = bstr .cbor sealed
+path-request-payload = bstr .size 8        ; random tag
+receipt-payload = bstr .size 24            ; receipt tag (16) || random nonce (8)
+link-request-payload = bstr .cbor sealed  ; a signed link-request-body inside
+link-accept-payload = bstr                 ; link id (16) || COSE_Encrypt0_Tagged of link-accept-body
+link-data-payload = bstr                   ; link id (16) || COSE_Encrypt0_Tagged of link-body
+keyset-request-payload = bstr .size 8      ; random tag
+keyset-payload = bstr .cbor keyset
+
+; ---------------------------------------------------------------------------
+; identities and keys
+
+keyset = [+ COSE_Key]                      ; signing keys only; no kid, no private params
+
+ratchet-key = {                            ; public HPKE key announced by an identity
+  1 => int,                                ; kty
+  2 => bstr .size 8,                       ; kid = SHA-256(pub)[0:8]
+  3 => int,                                ; alg: an HPKE id
+  * int => any,
+}
+
+; ---------------------------------------------------------------------------
+; signed and sealed layers
+
+signed = COSE_Sign1_Tagged / COSE_Sign_Tagged   ; protected kid (4) = signer address
+sealed = COSE_Encrypt0_Tagged / COSE_Encrypt_Tagged
+
+announce-body = {
+  ? 1 => bstr .cbor keyset,                ; only in a full announce
+  2 => uint,                               ; sequence
+  ? 4 => any,                              ; app data
+  5 => ratchet-key,
+}
+
+message-body = {
+  1 => [+ address],                        ; to
+  2 => uint,                               ; time, ms (the sender's claim)
+  ? 3 => tstr,                             ; title
+  ? 4 => any,                              ; content
+  ? 5 => { * any => any },                 ; fields
+  ? 6 => bstr .size 16,                    ; receipt secret
+}
+
+link-request-body = {
+  1 => COSE_Key,                           ; initiator's ephemeral KEM public key
+  2 => bstr .size 32,                      ; part_a
+  3 => address,                            ; the responder
+}
+
+link-accept-body = { 1 => bstr .size 32 }  ; part_b
+
+link-body = {                              ; a message body without `to`
+  2 => uint,
+  ? 3 => tstr,
+  ? 4 => any,
+  ? 5 => { * any => any },
+  ? 6 => bstr .size 16,
+  ? 7 => true,                             ; closing the link
+}
+
+; ---------------------------------------------------------------------------
+; the COSE structures used (RFC 9052, reduced)
+
+COSE_Sign1_Tagged = #6.18(COSE_Sign1)
+COSE_Sign_Tagged = #6.98(COSE_Sign)
+COSE_Mac0_Tagged = #6.17(COSE_Mac0)
+COSE_Encrypt0_Tagged = #6.16(COSE_Encrypt0)
+COSE_Encrypt_Tagged = #6.96(COSE_Encrypt)
+
+; RFC 9052 writes the two header fields as a `Headers` group; they are spelled
+; out here (identical on the wire) because some CDDL tools mis-align inline groups.
+COSE_Sign1 = [protected: prot, unprotected: header_map, payload: bstr, signature: bstr]
+COSE_Sign = [protected: prot, unprotected: header_map, payload: bstr, signatures: [+ COSE_Signature]]
+COSE_Signature = [protected: prot, unprotected: header_map, signature: bstr]
+COSE_Mac0 = [protected: prot, unprotected: header_map, payload: bstr, tag: bstr]
+COSE_Encrypt0 = [protected: prot, unprotected: header_map, ciphertext: bstr]
+COSE_Encrypt = [protected: prot, unprotected: header_map, ciphertext: bstr, recipients: [+ COSE_recipient]]
+COSE_recipient = [protected: prot, unprotected: header_map, ciphertext: bstr]
+
+prot = bstr .size 0 / bstr .cbor header_map      ; empty, or a serialized header map
+header_map = { * label => any }
+label = int / tstr
+
+COSE_Key = {
+  1 => int,                                ; kty
+  ? 2 => bstr,                             ; kid
+  3 => int,                                ; alg (required here)
+  * int => any,
+}

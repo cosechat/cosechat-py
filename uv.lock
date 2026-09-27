@@ -201,6 +201,7 @@ websocket = [
 [package.dev-dependencies]
 dev = [
     { name = "cwt" },
+    { name = "pycddl" },
     { name = "pycose" },
     { name = "pyserial" },
     { name = "pytest" },
@@ -222,6 +223,7 @@ provides-extras = ["websocket", "rnode", "all"]
 [package.metadata.requires-dev]
 dev = [
     { name = "cwt", specifier = ">=3" },
+    { name = "pycddl", specifier = ">=0.6.4" },
     { name = "pycose", specifier = ">=1.1" },
     { name = "pyserial", specifier = ">=3.5" },
     { name = "pytest", specifier = ">=8" },
@@ -348,6 +350,23 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/f9/e2/3e91f31a7d2b083fe6ef3fa267035b518369d9511ffab804f839851d2779/pluggy-1.6.0.tar.gz", hash = "sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3", size = 69412, upload-time = "2025-05-15T12:30:07.975Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/54/20/4d324d65cc6d9205fabedc306948156824eb9f0ee1633355a8f7ec5c66bf/pluggy-1.6.0-py3-none-any.whl", hash = "sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746", size = 20538, upload-time = "2025-05-15T12:30:06.134Z" },
+]
+
+[[package]]
+name = "pycddl"
+version = "0.6.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/e7/f693e8243f4d19b86a770dea7c6c43a14d8722fb5827e01777dc1fccf362/pycddl-0.6.4.tar.gz", hash = "sha256:6946ba4377b5470bd637434fa9b26d596de8ff2cc9c5473483b81418a525397a", size = 24551, upload-time = "2025-06-11T15:28:40.286Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7e/2f/34b1ba3477b1390d18bce8ba186e99ae5f7193148dbb1516a6076e049a25/pycddl-0.6.4-cp311-cp311-macosx_11_0_universal2.whl", hash = "sha256:028d425d3ae41682bc606ed839fd93b97d787ce19bd50583c9ffaf542b7e68eb", size = 2587757, upload-time = "2025-06-11T15:28:09.563Z" },
+    { url = "https://files.pythonhosted.org/packages/95/b7/1a0f1f610e491967372c8ff301aea3cfcd731265e14e0e1014d9a4c020de/pycddl-0.6.4-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:84870a702b519826b54b127742e784e745c53bf1373d05e0f96df0a89fc5ceca", size = 1473325, upload-time = "2025-06-11T15:28:11.17Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/57/b19119099299674c9346b08924d6012245cf8c24fc8ed6d9f1f357414531/pycddl-0.6.4-cp311-cp311-win_amd64.whl", hash = "sha256:5ba650b476a56ba2e0a9db4b70a3a651601f7176a0733aa64a43b45bdccaa85f", size = 1232949, upload-time = "2025-06-11T15:28:12.642Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/00/a942365e10ed5dea6b962313dded051061b1bad63cd3ca7158d1998968e3/pycddl-0.6.4-cp312-cp312-macosx_11_0_universal2.whl", hash = "sha256:314ef71197d49ec32e8763d759ab53a6962bea8d029d1b01992ecf3d9388a93b", size = 2585936, upload-time = "2025-06-11T15:28:14.392Z" },
+    { url = "https://files.pythonhosted.org/packages/0c/7f/43d64f027a686e3af8462489f0c36ef83bfa4992e2dc5ec27897715305ac/pycddl-0.6.4-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:39ca675f341a6a77654f4f6759bcb3ce0d47f1a772cb87e99b4e61d86bcb6053", size = 1473902, upload-time = "2025-06-11T15:28:16.391Z" },
+    { url = "https://files.pythonhosted.org/packages/af/14/be6e7f6660afb587c751fe11ac1e996811fda2f3ee17afd4c8e0b226f055/pycddl-0.6.4-cp312-cp312-win_amd64.whl", hash = "sha256:4a114e6a0baa564bf8c81c9c1660a80b7d7acfa8ceaece4656cce797093624e0", size = 1232662, upload-time = "2025-06-11T15:28:18.179Z" },
+    { url = "https://files.pythonhosted.org/packages/56/c6/42aece761a57e2d681aebadf4467dfa7654e7365050b068667e837ee8e88/pycddl-0.6.4-cp313-cp313-macosx_11_0_universal2.whl", hash = "sha256:8e2ebc4531889d406ab7cb351cfb6479243d8e12d98694936a4c264694d67775", size = 2585288, upload-time = "2025-06-11T15:28:19.676Z" },
+    { url = "https://files.pythonhosted.org/packages/34/70/fc167a501abd4fb2da8b79f236a5e20967de5dff061185de274db175184c/pycddl-0.6.4-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:8d6c9708685a2e0f189d8e89f1268b6ad4e1c68251ed39737cc67ed7bd866eec", size = 1473865, upload-time = "2025-06-11T15:28:21.548Z" },
+    { url = "https://files.pythonhosted.org/packages/68/e1/a591b84e414a2a100388c91bff20829ef9a8a9221409fe71072e1d05f62c/pycddl-0.6.4-cp313-cp313-win_amd64.whl", hash = "sha256:8e723cb86cb3ce14a57ee369aee28a3e113b290a13905eadc56741ccafbfdbaa", size = 1232004, upload-time = "2025-06-11T15:28:23.375Z" },
 ]
 
 [[package]]
