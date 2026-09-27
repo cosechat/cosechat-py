@@ -80,6 +80,8 @@ class _Outgoing:
   address: bytes
   future: asyncio.Future
   reseal: Callable[[], tuple[bytes, int]]  # fresh (payload, packet type) for each (re)send
+  attempts: int
+  fallback: Callable | None = None  # async () -> bool, tried when attempts run out
 
 
 class _Lane:
@@ -167,6 +169,8 @@ class Node:
     retry_max: float = 600.0,
     max_attempts: int = 4,
     accept_links: bool = True,
+    link_attempts: int = 3,
+    max_links: int = 256,
     path_ttl: float = 7 * 86400,
     announce_cap: float = 0.02,
     announce_queue_age: float = 3600.0,
@@ -207,6 +211,7 @@ class Node:
     self.peer_ratchets: dict[bytes, Key] = {}
     # short announces waiting for a keyset, and keyset requests we forwarded
     self._need_keyset: dict[bytes, tuple[_Lane, Packet]] = {}
+    self._waiting_messages: dict[bytes, list[Packet]] = {}  # sender -> messages to retry
     self._keyset_asked: dict[bytes, set] = {}
     self._keyset_requested_at: dict[bytes, float] = {}
     self._announced = False
@@ -221,10 +226,14 @@ class Node:
     self._delivered: OrderedDict[bytes, None] = OrderedDict()  # message ids we handed over
     # links (sessions, see link.py): live in memory only, closed explicitly
     self.accept_links = accept_links
+    # a link message unanswered after link_attempts sends means the peer has
+    # probably lost the link (restart): drop it and send the content sealed
+    self.link_attempts = link_attempts
+    self.max_links = max_links
     # a path is forgotten this long after the announce that made it (local
     # monotonic clock; Reticulum uses a week). Any valid announce refreshes it.
     self.path_ttl = path_ttl
-    self.links: dict[bytes, L.LinkKeys] = {}  # link id -> keys
+    self.links: OrderedDict[bytes, L.LinkKeys] = OrderedDict()  # link id -> keys, LRU order
     self._link_to: dict[bytes, bytes] = {}  # peer address -> link id
     self._pending_links: dict[bytes, tuple[L.PendingLink, asyncio.Future]] = {}
     self._accepts: OrderedDict[bytes, tuple[bytes, bytes]] = OrderedDict()  # id -> (peer, accept)
@@ -443,12 +452,21 @@ class Node:
       raise PermissionError(f'{t.hex()} announced a ratchet that is not quantum-safe')
     return ident
 
-  async def _dispatch(self, m: msg.Message, addr: bytes, reseal, receipt: bool):
+  async def _dispatch(
+    self, m: msg.Message, addr: bytes, reseal, receipt: bool, attempts=None, fallback=None
+  ):
     payload, kind = reseal()
     await self._send_data(addr, payload, kind)
     if not receipt:
       return
-    o = _Outgoing(m, addr, asyncio.get_running_loop().create_future(), reseal)
+    o = _Outgoing(
+      m,
+      addr,
+      asyncio.get_running_loop().create_future(),
+      reseal,
+      attempts or self.max_attempts,
+      fallback,
+    )
     self._outbox[msg.receipt_tag(m.receipt_secret, addr)] = o
     self._deliveries.setdefault(m.id, []).append(o.future)
     while len(self._deliveries) > 1000:
@@ -504,6 +522,12 @@ class Node:
       self.links.pop(old, None)
     self.links[keys.link_id] = keys
     self._link_to[keys.peer] = keys.link_id
+    while len(self.links) > self.max_links:
+      self._drop_link(next(iter(self.links)))  # least recently used
+
+  def _used_link(self, lid: bytes):
+    if lid in self.links:
+      self.links.move_to_end(lid)
 
   async def _send_on_link(self, addr, content, title, fields, receipt) -> msg.Message:
     keys = self.link_to(addr)
@@ -512,26 +536,39 @@ class Node:
     m, _ = L.read_message(keys, addr, body)
     m.sender = self.address
 
+    lid = keys.link_id
+
     def reseal():
       live = self.link_to(addr)
-      if live is None:
+      if live is None or live.link_id != lid:
         raise LookupError('link closed')
+      self._used_link(lid)
       return L.seal(live, body), LINK_DATA  # fresh IV each time
 
-    await self._dispatch(m, addr, reseal, receipt)
+    async def fallback():
+      # the peer did not answer on the link: it has probably lost it
+      log.debug('%s: link to %s seems dead, sending sealed', self, addr.hex())
+      self._drop_link(lid)
+      try:
+        sealed = await self.send(addr, content, title, fields)
+      except (LookupError, PermissionError):
+        return False
+      return await self.delivered(sealed)
+
+    await self._dispatch(m, addr, reseal, receipt, self.link_attempts, fallback)
     return m
 
   async def _retry(self, o: _Outgoing):
     tag = msg.receipt_tag(o.message.receipt_secret, o.address)
     wait = self.retry_after
     try:
-      for attempt in range(1, self.max_attempts + 1):
+      for attempt in range(1, o.attempts + 1):
         try:
           await asyncio.wait_for(asyncio.shield(o.future), wait)
           return
         except TimeoutError:
           pass
-        if attempt == self.max_attempts:
+        if attempt == o.attempts:
           break
         log.debug('%s: resending %s to %s', self, o.message.id.hex()[:8], o.address.hex())
         try:
@@ -540,8 +577,10 @@ class Node:
           break
         await self._send_data(o.address, payload, kind)
         wait = min(wait * 2, self.retry_max)
+      self._outbox.pop(tag, None)
+      result = await o.fallback() if o.fallback else False
       if not o.future.done():
-        o.future.set_result(False)
+        o.future.set_result(result)
     finally:
       self._outbox.pop(tag, None)
 
@@ -726,7 +765,8 @@ class Node:
   def _handle_keyset(self, lane: _Lane, p: Packet):
     asked = self._keyset_asked.pop(p.dest, set())
     waiting = self._need_keyset.pop(p.dest, None)
-    if not asked and waiting is None:
+    messages = self._waiting_messages.pop(p.dest, [])
+    if not asked and waiting is None and not messages:
       return  # nobody here asked for it
     if address_of(p.payload) != p.dest:
       return
@@ -745,6 +785,8 @@ class Node:
         self._spawn(other.send(p))
     if waiting is not None:
       self._handle_announce(*waiting)
+    for m in messages:
+      self._deliver(m)
 
   def _handle_data(self, lane: _Lane, p: Packet):
     """DATA and RECEIPT: take it if it is ours, else forward like any payload."""
@@ -805,6 +847,13 @@ class Node:
         self.identities.get,
         ratchets=self.ratchets,
       )
+    except msg.SenderUnknown as e:
+      # e.g. we restarted and forgot them: fetch their keyset, then try again
+      q = self._waiting_messages.setdefault(e.address, [])
+      if len(q) < 16 and len(self._waiting_messages) <= 256:
+        q.append(p)
+      self._request_keyset(e.address)
+      return
     except Exception as e:
       log.debug('%s: could not open message: %r', self, e)
       return
@@ -813,6 +862,10 @@ class Node:
       log.debug('%s: dropped message from non-quantum-safe %s', self, m.sender.hex())
       return
     self.identities.setdefault(m.sender, sender)
+    if m.recipients == [self.address] and m.sender in self._link_to:
+      # a one-to-one sealed message means the peer has no link to us any more
+      # (it would have used it): ours is dead weight
+      self._drop_link(self._link_to[m.sender])
     self._accept_message(m)
 
   def _accept_message(self, m: msg.Message):
@@ -891,6 +944,7 @@ class Node:
     if close:
       self._drop_link(keys.link_id)
       return
+    self._used_link(keys.link_id)
     self._accept_message(m)
 
   def _call(self, cb, *args):

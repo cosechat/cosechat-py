@@ -240,7 +240,8 @@ Receivers MUST:
 1. open the envelope with the ratchet named by the kid (drop the message if
    there is no kid, or the ratchet is not held any more),
 2. read the sender from the protected `kid` of the signature,
-3. find the sender's keyset (from announces, or the attached identity below),
+3. find the sender's keyset (from announces, the attached identity below, or
+   by fetching it by address with KEYSET_REQUEST, §7.2, and trying again),
    check it hashes to that kid, and verify the signature,
 4. reject the message unless their own address is in `to`. Because `to` is
    signed, a recipient cannot re-encrypt someone else's signed message to a
@@ -542,6 +543,14 @@ link message id = SHA-256(link id || body)
   body with a new IV.
 * Once a link to a peer exists, the reference `send()` uses it in both
   directions. `close_link()` sends the close flag and forgets the keys.
+* **A dead link is dropped.** A peer that restarted has lost its link keys
+  and silently ignores the link id; it cannot say so, because a link message
+  does not name its sender. So a sender that gets no receipt after a few link
+  attempts (reference: 3) MUST drop the link and send the content as a sealed
+  message instead. And a node that receives a sealed one-to-one message from
+  a peer it holds a link with drops that link: the peer would have used it.
+* Nodes bound how many links they hold (reference: 256, least recently used
+  goes first).
 
 ## 10. Roads
 

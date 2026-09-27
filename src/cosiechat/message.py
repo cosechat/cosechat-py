@@ -98,6 +98,14 @@ class Message:
     return self.timestamp / 1000
 
 
+class SenderUnknown(CoseError):
+  """We opened a message but do not have its sender's keyset (yet)."""
+
+  def __init__(self, address: bytes):
+    super().__init__(f'unknown sender {address.hex()}')
+    self.address = address
+
+
 def message_id(signed: bytes) -> bytes:
   return hashlib.sha256(signed).digest()
 
@@ -266,7 +274,7 @@ def unseal(
     if isinstance(attached, bytes) and address_of(attached) == sender_addr:
       sender = Identity.from_bytes(attached)
   if sender is None:
-    raise CoseError(f'unknown sender {sender_addr.hex()}')
+    raise SenderUnknown(sender_addr)
   if sender.address != sender_addr:
     raise CoseError('resolved identity does not match sender address')
 

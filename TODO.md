@@ -97,12 +97,12 @@ Legend: [ ] todo, [~] partly done
 
 ### A. Needed before real use
 
-1. [ ] **Links must survive a peer restart.** If the peer loses its link keys
-   (restart, `close_link` lost in transit), our `send()` keeps using the link
-   and resends into the void; it never falls back to a sealed message. Fix:
-   when a link message runs out of attempts, drop the link and resend the
-   same content sealed; and/or let the peer answer an unknown link id with a
-   tiny "no such link" packet. Also cap how many links a node holds.
+1. [x] **Links survive a peer restart.** Done (SPEC §9.2): after
+   `link_attempts` (3) unanswered sends the link is dropped and the content
+   goes sealed; a sealed one-to-one message from a peer drops our link to it;
+   links are capped (256, LRU). Also: a message from an unknown sender makes
+   the node fetch the sender's keyset and retry (restart-proof). A "no such
+   link" reply is impossible: link messages do not name their sender.
 2. [ ] **Link keepalive and idle timeout** (Reticulum links have both). Close
    idle links on the local clock; detect a dead peer. Default timeouts are
    local policy.

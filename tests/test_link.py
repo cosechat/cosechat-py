@@ -181,7 +181,9 @@ def test_link_on_lossy_lora_road():
   async def main():
     random.seed(3)
     hub = MemoryHub()
-    a, b = await pair(hub, mtu=255, retry_after=0.1, retry_max=0.4, max_attempts=15)
+    a, b = await pair(
+      hub, mtu=255, retry_after=0.1, retry_max=0.4, max_attempts=15, link_attempts=10
+    )
     box = inbox(b)
     await a.open_link(b.address, timeout=20)
     hub.loss = 0.1  # link messages are one frame, so 10% loss is easy
@@ -226,5 +228,62 @@ def test_node_can_refuse_links():
       await a.open_link(b.address, timeout=0.3)
     await a.stop()
     await b.stop()
+
+  run(main())
+
+
+def test_link_survives_peer_restart_by_falling_back_to_sealed():
+  async def main():
+    hub = MemoryHub()
+    a, b = await pair(hub, retry_after=0.1, link_attempts=2)
+    await a.open_link(b.address)
+    # b restarts: same identity, but its link keys (and in-memory ratchets) are gone
+    await b.stop()
+    b2 = make(hub, identity=b.identity, retry_after=0.1)
+    box = inbox(b2)
+    await b2.start()
+    await b2.announce()
+    await until(lambda: a.peer_ratchet(b.address).kid == b2.ratchets.current().kid)
+    m = await a.send(b.address, 'are you back?')
+    assert await a.delivered(m, timeout=10)
+    assert box[0].content == 'are you back?' and box[0].link_id is None
+    assert a.link_to(b.address) is None  # the dead link is gone
+    await a.stop()
+    await b2.stop()
+
+  run(main())
+
+
+def test_sealed_one_to_one_message_drops_our_dead_link():
+  async def main():
+    hub = MemoryHub()
+    a, b = await pair(hub)
+    await a.open_link(b.address)
+    b._drop_link(b.link_to(a.address).link_id)  # b lost the link (e.g. restart)
+    m = await b.send(a.address, 'no link here')
+    assert await b.delivered(m, timeout=5)
+    await until(lambda: a.link_to(b.address) is None)
+    await a.stop()
+    await b.stop()
+
+  run(main())
+
+
+def test_link_table_is_bounded():
+  async def main():
+    hub = MemoryHub()
+    a = make(hub, max_links=2)
+    peers = [make(hub) for _ in range(3)]
+    for n in (a, *peers):
+      await n.start()
+    for n in (a, *peers):
+      await n.announce()
+    await until(lambda: all(a.peer_ratchet(p.address) for p in peers))
+    await until(lambda: all(p.peer_ratchet(a.address) for p in peers))
+    for p in peers:
+      await a.open_link(p.address)
+    assert len(a.links) == 2 and a.link_to(peers[0].address) is None
+    for n in (a, *peers):
+      await n.stop()
 
   run(main())

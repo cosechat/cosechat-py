@@ -32,7 +32,8 @@ def inbox(node):
 
 def make(hub, suite='pq', mtu=500, **kw):
   kw.setdefault('quantum_safe_only', suite != 'prequantum')
-  n = Node(Identity.generate(suite), rebroadcast_delay=0.01, **kw)
+  ident = kw.pop('identity', None) or Identity.generate(suite)
+  n = Node(ident, rebroadcast_delay=0.01, **kw)
   n.add_road(hub.road(mtu=mtu))
   return n
 
@@ -190,7 +191,9 @@ def test_attached_identity_lets_unknown_sender_through():
   run(main())
 
 
-def test_unknown_sender_without_identity_is_dropped():
+def test_unknown_sender_is_looked_up_then_delivered():
+  """b never heard a's announce: it fetches a's keyset by address, then opens the message."""
+
   async def main():
     hub = MemoryHub()
     a, b = make(hub), make(hub)
@@ -198,7 +201,24 @@ def test_unknown_sender_without_identity_is_dropped():
     async with a, b:
       await b.announce()
       await until(lambda: b.address in a.paths)
-      await a.send(b.address, 'anonymous')
+      await a.send(b.address, 'who am i')
+      await until(lambda: box)
+    assert box[0].sender == a.address and b.known(a.address) == a.identity.public()
+
+  run(main())
+
+
+def test_unknown_sender_with_no_keyset_anywhere_is_dropped():
+  async def main():
+    hub = MemoryHub()
+    a, b = make(hub), make(hub)
+    box = inbox(b)
+    async with b:
+      async with a:
+        await b.announce()
+        await until(lambda: b.address in a.paths)
+        a._handle_keyset_request = lambda lane, p: None  # nobody will answer b
+        await a.send(b.address, 'anonymous', receipt=False)
       await asyncio.sleep(0.1)
     assert box == []
 
