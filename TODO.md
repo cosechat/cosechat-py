@@ -162,9 +162,9 @@ Legend: [ ] todo, [~] partly done
 
 ### C. Library quality
 
-17. [ ] Public API cleanup: decide what is public, docstrings, type hints,
-    `py.typed`; `seal_each` is library-only now (the node signs once and
-    envelopes per recipient itself).
+17. [x] **Public API.** Done: `cosiechat/__init__.py` documents and exports
+    the public surface (everything else may change); `py.typed`;
+    `__version__`. `seal_each` stays as a library helper for apps without a node.
 18. [x] **Private `cryptography` helper guarded.** `cryptography>=50,<51`
     and `tests/test_keys_private_api.py` (helper present, aad really bound).
     When 51 comes out: run that test, then raise the bound.
@@ -177,8 +177,10 @@ Legend: [ ] todo, [~] partly done
     change. Reticulum-style aspects were rejected on purpose: they would
     change address derivation, and services bits, message `fields` and
     separate identities already cover the uses.
-22. [ ] Packaging: versioning, changelog, CI (tests + ruff + wolfCOSE
-    checker), PyPI.
+22. [~] **Packaging.** Done: version 0.1.0, CHANGELOG.md, `uv build` makes a
+    clean wheel, `.github/workflows/ci.yml` (gate + a wolfSSL/wolfCOSE build
+    running the vector checker). Left: running CI needs the GitHub remote
+    (E.23), and publishing to PyPI needs the user's account (ask first).
 
 ### D. Later / optional
 

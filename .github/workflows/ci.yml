@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-extras
+      - run: scripts/gate.sh
+
+  wolfcose:
+    # the Arduino stack: stock wolfSSL + wolfCOSE must accept the test vectors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-extras
+      - name: build wolfSSL
+        run: |
+          git clone --depth 1 https://github.com/wolfSSL/wolfssl.git /tmp/wolfssl
+          cmake -S /tmp/wolfssl -B /tmp/wolfssl/build -DCMAKE_INSTALL_PREFIX=/tmp/wolf \
+            -DBUILD_SHARED_LIBS=OFF -DWOLFSSL_EXAMPLES=no -DWOLFSSL_CRYPT_TESTS=no \
+            -DWOLFSSL_ECC=yes -DWOLFSSL_ED25519=yes -DWOLFSSL_CURVE25519=yes \
+            -DWOLFSSL_AESGCM=yes -DWOLFSSL_CHACHA=yes -DWOLFSSL_POLY1305=yes \
+            -DWOLFSSL_SHA3=yes -DWOLFSSL_SHAKE256=yes -DWOLFSSL_SHA384=yes -DWOLFSSL_SHA512=yes \
+            -DWOLFSSL_KEYGEN=yes -DWOLFSSL_HKDF=yes -DWOLFSSL_HPKE=yes \
+            -DWOLFSSL_MLDSA=yes -DWOLFSSL_MLKEM=yes -DWOLFSSL_AESKEYWRAP=yes
+          cmake --build /tmp/wolfssl/build -j4
+          cmake --install /tmp/wolfssl/build
+      - name: build wolfCOSE
+        run: |
+          git clone --depth 1 https://github.com/wolfSSL/wolfCOSE.git /tmp/wolfcose
+          FLAGS=$(make -s -C interop/wolfcose -f Makefile print-flags)
+          PKG_CONFIG_PATH=/tmp/wolf/lib/pkgconfig make -C /tmp/wolfcose all EXTRA_CFLAGS="$FLAGS"
+      - name: check the vectors with wolfCOSE
+        run: make -C interop/wolfcose test WOLFSSL_PREFIX=/tmp/wolf WOLFCOSE_DIR=/tmp/wolfcose PYTHON=$PWD/.venv/bin/python

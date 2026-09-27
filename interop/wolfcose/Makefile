@@ -29,3 +29,8 @@ clean:
 	rm -f check cases.txt
 
 .PHONY: test clean
+
+print-flags:
+	@echo $(WOLFCOSE_FLAGS)
+
+.PHONY: print-flags
