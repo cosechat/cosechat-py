@@ -140,11 +140,10 @@ Legend: [ ] todo, [~] partly done
     `cosiechat constants` from the code (protocol MUST values, `Node`
     defaults read from its signature, limits); tests keep it in step and
     force every new numeric `Node` setting to be documented.
-11. [ ] **Node behaviour as state machines / pseudo-code** for receive, send,
-    retry, link setup and path request, so ports match behaviour and not
-    just formats.
-12. [ ] **Security considerations section** in SPEC (threat model, what
-    routers learn, DoS surfaces), pulling from CAVEATS.md.
+11. [x] **Node behaviour as pseudo-code.** Done: SPEC §17 (receive,
+    announces and paths, routing, send/retry, links/resources/propagation).
+12. [x] **Security considerations.** Done: SPEC §18 (threat model, what each
+    party learns, authenticity, forward secrecy, replay, DoS).
 13. [ ] **Byte-exact vectors** where the output is deterministic: Ed25519,
     HMAC, AEAD with a fixed IV, packet and fragment encodings, receipt tags,
     link key derivation (from fixed parts).

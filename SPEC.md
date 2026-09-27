@@ -992,3 +992,178 @@ copy and the code differ).
 | store per destination | 64 | packets (MemoryStore) |
 | store destinations | 1024 | destinations (MemoryStore) |
 <!-- /constants -->
+
+## 17. Node behaviour (pseudo-code)
+
+What the reference node does, in order, so another implementation behaves the
+same and not just encodes the same. `now` is the node's own monotonic clock.
+Numbers are the defaults from §16.
+
+### 17.1 Receiving a frame (on road R)
+
+```
+on_frame(R, bytes):
+  if R has a road key: bytes = unwrap(bytes) or drop          # §8.2
+  item = decode(bytes) or drop                                 # unknown version: drop
+  if item is NACK:        resend the listed fragments of item.id if we sent it   # §8.1
+                          return
+  if item is FRAGMENT:    add to reassembly(R, item.id)
+                          restart the stall timer of (R, id); cancel it when complete
+                          if not complete: return
+                          item = decode(reassembled) or drop
+  if hash(item) already seen:
+    if item is ANNOUNCE:  seen_announce_again(R, item)         # §9 fewer hops
+    return
+  remember hash(item)
+  dispatch by item.type:
+    ANNOUNCE → on_announce      DATA / RECEIPT / LINK_* → on_routed
+    PATH_REQUEST → on_path_request   KEYSET_REQUEST → on_keyset_request   KEYSET → on_keyset
+
+fragment stall timer fires (R, id):                            # after 2 frame-times + 0.2 s
+  if the set is still incomplete and fewer than 3 NACKs were sent:
+    send NACK(id, missing indexes) on R; re-arm with twice the delay
+```
+
+### 17.2 Announces and paths
+
+```
+on_announce(R, p):
+  cheap checks, else drop: signature kid == p.dest; an included keyset hashes to
+    p.dest and matches any pinned keyset; (quantum_safe_only) identity and ratchet PQ
+  rate limit 'announce' on R, else drop
+  verify(p.payload, keyset from p or pinned)
+    unknown keyset (short announce) → park (R, p); send KEYSET_REQUEST(p.dest); return
+    invalid → drop
+  if we hold an announce from p.dest with a higher sequence: drop
+  store keyset (pin), announce, ratchet; note peer as recently heard (LRU, 10,000)
+  if services has bit 1: remember p.dest as a propagation node
+  path[p.dest] = (R, p.via, p.hops + 1, expires = now + 1 week)
+  resolve anyone waiting for this path; hand held packets for p.dest to that path
+  if transport and p.hops + 1 < 16 and p.dest not rebroadcast in the last 60 s:
+    after a random delay, queue ANNOUNCE(hops + 1, via = us) on every road   # §9.0 budget
+
+seen_announce_again(R, p):             # same bytes as the announce we accepted
+  if no path, or we are waiting on a path request, or p.hops + 1 < path.hops:
+    path[p.dest] = (R, p.via, p.hops + 1, ...)
+
+on_path_request(R, p):
+  rate limit 'request'
+  if p.dest is us: after a random delay, send a FULL announce
+  elif transport and we hold an announce and a path: answer on R with the cached
+    announce (hops = path.hops, via = us), through R's announce queue
+  elif transport: rebroadcast the request with hops + 1
+
+path(dest): a path past its expiry is deleted and treated as unknown
+```
+
+### 17.3 Routed packets
+
+```
+on_routed(R, p):
+  if p.dest is us:
+    DATA → deliver(p)   RECEIPT → on_receipt   LINK_REQUEST / ACCEPT / DATA → §17.5
+    return
+  if not transport: drop
+  if p.via is us, or (p.via is null and we are a propagation node, and dest is not
+      a direct neighbour on R): forward(p)
+
+forward(p):
+  if no path to p.dest: (propagation node) store (p.type, p.payload) for p.dest; return
+  if p.hops + 1 >= 16: drop
+  send (p.type, hops + 1, dest, via = path.via, payload) on path.road
+
+deliver(p):                                        # a sealed message for us
+  rate limit 'message'
+  open with the ratchet named by the kid; verify the signature
+    sender unknown → park p; send KEYSET_REQUEST(sender); retry when it arrives
+  (quantum_safe_only) sender not quantum-safe: drop
+  if one-to-one and we hold a link to the sender: drop that link   # it lost it
+  accept(m)
+
+accept(m):
+  if m has a receipt secret: send RECEIPT(receipt_tag, 8 random bytes) to m.sender
+  if m.id already handed over: ask for a fresh path to m.sender (≤ once per 30 s); return
+  remember m.id; hand m to the application
+```
+
+### 17.4 Sending and retrying
+
+```
+send(to, content):
+  if a link to `to` exists: send on the link (§17.5), attempts = 3, fallback = sealed
+  else: need identity + ratchet for `to` (else PATH_REQUEST and wait; none → error)
+        sign once; per recipient: envelope to its newest ratchet, attempts = 4,
+        fallback = deposit with a propagation node (§9.4), if any
+  send_data(to, payload):
+    via = path.via if we have a path, else null; send on path.road, or on all roads
+
+retry(o):                                   # until its RECEIPT arrives
+  wait 30 s, then double each time up to 600 s
+  after the 2nd unanswered send: send a fresh PATH_REQUEST (≤ once per 30 s)
+  each resend: a new envelope (or new IV on a link) around the same content
+  when the attempts run out: forget the path; run the fallback, if any; else fail
+
+on_receipt(p): find the send whose tag == p.payload[0:16]; mark it delivered
+```
+
+### 17.5 Links, resources, propagation
+
+```
+open_link(peer):
+  request = envelope to peer's ratchet of sign({ephemeral KEM pub, part_a, peer address})
+  send LINK_REQUEST; wait; no accept → a NEW request (new link id), backing off
+on LINK_REQUEST: rate limit 'link'; sender unknown → park + fetch keyset
+  open, verify, check it names us; derive keys; keep the accept (answer repeats with it)
+on LINK_ACCEPT: finish; delete the ephemeral private key; the link is up
+on LINK_DATA: open with the link key, then by body:
+  message body → accept(m)          7: true → forget the link
+  resource fields 8–11 → §9.3       propagation fields 12–16 → §9.4
+links: at most 256, least recently used forgotten first
+```
+
+## 18. Security considerations
+
+**Threat model.** Attackers can read, drop, replay, reorder and inject
+frames on any road, run transport and propagation nodes, and later steal
+devices (and their stored keys). A large quantum computer may exist in the
+future and be used on recorded traffic.
+
+**What each party learns.**
+
+| | on-road observer | transport / propagation node | recipient |
+|---|---|---|---|
+| destination address, sizes, timing, hops | yes | yes | yes |
+| ratchet id (links to the destination only) | yes | yes | yes |
+| link id (ties messages of one session together) | yes | yes | yes |
+| sender, full recipient list, content | no | no | yes |
+| who deposits / fetches at a propagation node | no | the fetcher (link peer) and depositor | — |
+| everything, with a road key in `encrypt` mode | only sizes and timing | as above | yes |
+
+**Authenticity and confidentiality.** Messages are signed by the sender
+(ML-DSA by default) and sealed to the recipient's ratchet (X-Wing by default);
+the signed `to` list stops a recipient re-sealing a message to someone else
+as if it were addressed to them. Links authenticate the initiator by
+signature and the responder by ratchet possession; link messages are not
+signed (no third-party proof of authorship). Announces, keysets and ratchets
+are self-certifying through the address hash, and addresses are pinned on
+first use (TOFU). Receipts prove the recipient opened the message; in a
+multi-recipient message recipients could forge each other's receipts.
+
+**Forward secrecy** comes from deleting ratchets (sealed messages) and link
+ephemeral keys (links). How long ratchets live is storage policy (§7.1).
+Identities hold no decryption key at all.
+
+**Replay.** Duplicate packets are filtered in memory; message ids are handed
+over once; announce sequences only go up, so a replayed old announce cannot
+roll back a path or a ratchet.
+
+**Denial of service.** Every expensive step (signature checks, HPKE decaps,
+answers that transmit) is behind cheap checks and per-road token buckets
+(§9.0); all tables are bounded (§16); announces have an airtime budget; NACKs
+and resource requests are bounded in count. A neighbour can still fill a
+road's airtime or pin a mailbox's size at a propagation node; road keys (§8.2)
+keep strangers off a road.
+
+**Not covered.** Traffic analysis beyond what is listed, a compromised device
+(its held ratchets open recent traffic), weak road passphrases, and the
+maturity of the drafts in §2 (see CAVEATS.md).
