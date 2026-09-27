@@ -53,6 +53,9 @@ Known limits of cosiechat as it stands. The wire format is in
   only order one identity's own announces. The price: a peer that rotates
   its ratchet and then loses the new one (say, a reboot with RAM-only
   ratchets) stays unreachable until it announces again.
+* **Forgotten peers lose their pin.** A node remembers at most `max_peers`
+  peers (10,000). One it forgot is trusted on first use again, like a
+  stranger. Keep contacts you care about in application storage.
 * **Addresses are 128 bits.** Forging a keyset for an existing address takes
   a second preimage of truncated SHA-256: about 2⁶⁴ sequential quantum
   evaluations with Grover's algorithm, far out of reach. Nodes also pin an

@@ -50,6 +50,13 @@ LIMITS = [
   ('link accepts kept', node.ACCEPT_CACHE, 'to answer a repeated link request'),
   ('messages waiting for a keyset', node.WAITING_PER_SENDER, 'per unknown sender'),
   ('senders waited on', node.WAITING_SENDERS, 'unknown senders at once'),
+  ('announce queue', node.ANNOUNCE_QUEUE, 'destinations waiting per road (most hops dropped)'),
+  ('timer tables', node.TIMER_TABLE, 'per-address rate-limit timers remembered'),
+  ('keyset waits', node.KEYSET_WAITS, 'short announces / forwarded requests awaiting a keyset'),
+  *[
+    (f'ingress: {k}', f'{rate}/s, burst {burst}', 'per road (`Node(ingress=...)`)')
+    for k, (rate, burst) in node.INGRESS.items()
+  ],
   ('store per destination', store.MemoryStore().per_dest, 'packets (MemoryStore)'),
   ('store destinations', store.MemoryStore().max_dests, 'destinations (MemoryStore)'),
 ]
@@ -69,6 +76,7 @@ NODE_NOTES = {
   'nack_attempts': 'NACKs per stalled fragment set',
   'max_links': 'links held (least recently used dropped)',
   'path_ttl': 's a path lives after the announce that set it',
+  'max_peers': 'peers remembered (least recently heard forgotten first)',
   'announce_cap': 'share of a slow road announces may use',
   'announce_queue_age': 's an announce may wait in the queue',
   'rebroadcast_min_interval': 's between rebroadcasts of one identity',

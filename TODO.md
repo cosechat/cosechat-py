@@ -117,10 +117,10 @@ Legend: [ ] todo, [~] partly done
    over fewer hops wins; path-request answers get past the duplicate filter;
    a fresh path request after two unanswered sends; failed deliveries forget
    the path (`test_paths.py` routes around a vanished transport).
-6. [ ] **Ingress limits.** Cap announces, keyset requests and link requests
-   *received* per road per second, and bound the in-memory tables (links,
-   keyset waits, rebroadcast timers). Today a noisy neighbour costs CPU (an
-   ML-DSA verify per announce that passes the cheap checks) and memory.
+6. [x] **Ingress limits and bounded tables.** Done (SPEC §9.0): per-road
+   token buckets for announce verification, link requests, messages for us,
+   and path/keyset requests (`Node(ingress=...)`); peers capped at
+   `max_peers` (LRU); announce queue, timer tables and keyset waits capped.
 7. [ ] **Large transfers (like Reticulum Resources):** chunking, windowing and
    a whole-object hash, over links, for attachments. Today attachments ride
    in `fields` inside one message.

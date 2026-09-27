@@ -484,6 +484,14 @@ reference, following Reticulum:
   `dest` is pinned to another keyset, or (by default) if the identity or its
   ratchet is not quantum-safe.
 
+* **Ingress limits.** Work that costs CPU or airtime is rate-limited per
+  road with token buckets, applied after the cheap checks: announce
+  signature checks, link requests, messages for us, and path/keyset
+  requests (reference numbers in §16).
+* **Bounded state.** Peers (keyset, announce, path, ratchet) are capped and
+  the least recently heard is forgotten; queues and per-address timers are
+  capped too.
+
 All of this runs on the node's own clock and is local policy: nodes MAY use
 other numbers. The RNode bitrate is `sf * ((4 / cr) / (2^sf / (bw / 1000))) * 1000`.
 Within a 2% budget on one 125 kHz LoRa channel, shared by every node on it:
@@ -860,6 +868,7 @@ copy and the code differ).
 | nack_attempts | 3 | NACKs per stalled fragment set |
 | max_links | 256 | links held (least recently used dropped) |
 | path_ttl | 604,800 | s a path lives after the announce that set it |
+| max_peers | 10,000 | peers remembered (least recently heard forgotten first) |
 | announce_cap | 0.02 | share of a slow road announces may use |
 | announce_queue_age | 3600 | s an announce may wait in the queue |
 | rebroadcast_min_interval | 60 | s between rebroadcasts of one identity |
@@ -882,6 +891,13 @@ copy and the code differ).
 | link accepts kept | 256 | to answer a repeated link request |
 | messages waiting for a keyset | 16 | per unknown sender |
 | senders waited on | 256 | unknown senders at once |
+| announce queue | 256 | destinations waiting per road (most hops dropped) |
+| timer tables | 4096 | per-address rate-limit timers remembered |
+| keyset waits | 256 | short announces / forwarded requests awaiting a keyset |
+| ingress: announce | 5/s, burst 20 | per road (`Node(ingress=...)`) |
+| ingress: link | 2/s, burst 10 | per road (`Node(ingress=...)`) |
+| ingress: message | 50/s, burst 200 | per road (`Node(ingress=...)`) |
+| ingress: request | 10/s, burst 30 | per road (`Node(ingress=...)`) |
 | store per destination | 64 | packets (MemoryStore) |
 | store destinations | 1024 | destinations (MemoryStore) |
 <!-- /constants -->

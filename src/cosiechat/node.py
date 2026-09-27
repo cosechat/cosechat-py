@@ -76,6 +76,17 @@ WAITING_SENDERS = 256
 FRAGMENT_CACHE_SETS = 32  # sent fragment sets kept for NACKs
 FRAGMENT_CACHE_TIME = 60.0  # s
 NACK_BASE_DELAY = 0.2  # s, added to two frame-times before asking for fragments
+ANNOUNCE_QUEUE = 256  # destinations waiting in one road's announce queue
+TIMER_TABLE = 4096  # per-address timers (rate limits) remembered
+KEYSET_WAITS = 256  # short announces / forwarded requests waiting on a keyset
+
+# ingress: per road, (per second, burst) for work that costs CPU or airtime
+INGRESS = {
+  'announce': (5, 20),  # signature verifications
+  'link': (2, 10),  # link requests: HPKE + signature
+  'message': (50, 200),  # messages for us: HPKE
+  'request': (10, 30),  # path and keyset requests: we may transmit an answer
+}
 
 
 @dataclass
@@ -120,9 +131,22 @@ class _Lane:
     # fragments we sent, kept briefly so a receiver can ask for missing ones
     self._sent: OrderedDict[bytes, tuple[list[bytes], float]] = OrderedDict()
     self.fragment_cache_time = FRAGMENT_CACHE_TIME
+    self._buckets: dict[str, list[float]] = {}  # kind -> [tokens, last refill]
     self.queue: dict[bytes, tuple[int, float, Packet]] = {}  # dest -> (hops, queued at, packet)
     self._ready_at = 0.0
     self._wake = asyncio.Event()
+
+  def allow(self, kind: str, limits: dict) -> bool:
+    """Token bucket per road and kind of incoming work (local clock)."""
+    rate, burst = limits[kind]
+    now = time.monotonic()
+    b = self._buckets.setdefault(kind, [burst, now])
+    b[0] = min(burst, b[0] + (now - b[1]) * rate)
+    b[1] = now
+    if b[0] < 1:
+      return False
+    b[0] -= 1
+    return True
 
   @property
   def max_frame(self) -> int:
@@ -171,6 +195,11 @@ class _Lane:
     if not self.budgeted:
       await self.send(packet)
       return
+    if packet.dest not in self.queue and len(self.queue) >= ANNOUNCE_QUEUE:
+      worst = max(self.queue, key=lambda d: self.queue[d][:2])  # most hops, then oldest
+      if self.queue[worst][0] <= packet.hops:
+        return
+      del self.queue[worst]
     self.queue[packet.dest] = (packet.hops, time.monotonic(), packet)
     self._wake.set()
 
@@ -215,6 +244,8 @@ class Node:
     store: Store | None = None,
     max_links: int = 256,
     path_ttl: float = 7 * 86400,
+    max_peers: int = 10000,
+    ingress: dict | None = None,
     announce_cap: float = 0.02,
     announce_queue_age: float = 3600.0,
     rebroadcast_min_interval: float = 60.0,
@@ -280,6 +311,11 @@ class Node:
     # a path is forgotten this long after the announce that made it (local
     # monotonic clock; Reticulum uses a week). Any valid announce refreshes it.
     self.path_ttl = path_ttl
+    # peers remembered (identity, announce, path, ratchet); the least recently
+    # heard is forgotten first
+    self.max_peers = max_peers
+    self._peers: OrderedDict[bytes, None] = OrderedDict()
+    self.ingress = {**INGRESS, **(ingress or {})}
     self.links: OrderedDict[bytes, L.LinkKeys] = OrderedDict()  # link id -> keys, LRU order
     self._link_to: dict[bytes, bytes] = {}  # peer address -> link id
     self._pending_links: dict[bytes, tuple[L.PendingLink, asyncio.Future]] = {}
@@ -777,13 +813,17 @@ class Node:
   def _handle_announce(self, lane: _Lane, p: Packet):
     if p.dest == self.address or not self._precheck_announce(p):
       return
+    if not lane.allow('announce', self.ingress):
+      log.debug('%s: announce rate limit on %s', self, lane.road)
+      return
     try:
       ann = msg.verify_announce(p.payload, p.dest, self.identities.get)
     except msg.KeysetNeeded:
       # a short announce from someone we have not met: fetch the keyset (from
       # anyone; it is self-authenticating), then look at this announce again
-      self._need_keyset[p.dest] = (lane, p)
-      self._request_keyset(p.dest)
+      if p.dest in self._need_keyset or len(self._need_keyset) < KEYSET_WAITS:
+        self._need_keyset[p.dest] = (lane, p)
+        self._request_keyset(p.dest)
       return
     except Exception as e:  # anything malformed from the network is just dropped
       log.debug('%s: invalid announce: %r', self, e)
@@ -797,10 +837,31 @@ class Node:
     self.identities[p.dest] = ann.identity
     self.announces[p.dest] = (p.payload, ann)
     self.peer_ratchets[p.dest] = ann.ratchet
+    self._heard(p.dest)
     path = self._update_path(lane, p, ann.sequence)
     for cb in self._announce_handlers:
       self._call(cb, ann, path)
     self._rebroadcast(p)
+
+  def _heard(self, address: bytes):
+    """Note activity from a peer; forget the least recent ones beyond max_peers."""
+    self._peers[address] = None
+    self._peers.move_to_end(address)
+    while len(self._peers) > self.max_peers:
+      old, _ = self._peers.popitem(last=False)
+      if old == self.address:
+        continue
+      for table in (self.identities, self.announces, self.paths, self.peer_ratchets):
+        table.pop(old, None)
+
+  def _prune(self, table: dict):
+    """Keep a per-address timer table bounded: drop entries whose time has passed."""
+    if len(table) > TIMER_TABLE:
+      now = time.monotonic()
+      for k in [k for k, t in table.items() if t <= now]:
+        del table[k]
+      while len(table) > TIMER_TABLE:
+        table.pop(next(iter(table)))
 
   def _seen_announce_again(self, lane: _Lane, p: Packet):
     """
@@ -834,6 +895,7 @@ class Node:
       log.debug('%s: not rebroadcasting %s again so soon', self, p.dest.hex())
       return
     self._rebroadcast_at[p.dest] = now + self.rebroadcast_min_interval
+    self._prune(self._rebroadcast_at)
     fwd = Packet(ANNOUNCE, p.hops + 1, p.dest, self.address, p.payload)
     self._spawn(self._delayed(self._broadcast, fwd))
 
@@ -847,11 +909,14 @@ class Node:
     if now < self._keyset_requested_at.get(address, 0.0):
       return
     self._keyset_requested_at[address] = now + self.retry_after
+    self._prune(self._keyset_requested_at)
     p = Packet(KEYSET_REQUEST, 0, address, None, random.randbytes(REQUEST_TAG_SIZE))
     self._mark_seen(p.hash)
     self._spawn(self._send_all(p))
 
   def _handle_keyset_request(self, lane: _Lane, p: Packet):
+    if not lane.allow('request', self.ingress):
+      return
     ident = self.identities.get(p.dest)
     if ident is not None:
       # we are it, or we know it: the keyset proves itself by hashing to the address
@@ -859,6 +924,8 @@ class Node:
       self._spawn(self._delayed(lane.send, resp))
       return
     if self.transport and p.hops + 1 < self.max_hops:
+      if p.dest not in self._keyset_asked and len(self._keyset_asked) >= KEYSET_WAITS:
+        return
       self._keyset_asked.setdefault(p.dest, set()).add(lane)
       fwd = Packet(KEYSET_REQUEST, p.hops + 1, p.dest, None, p.payload)
       self._spawn(self._delayed(self._send_all, fwd))
@@ -892,10 +959,12 @@ class Node:
   def _handle_data(self, lane: _Lane, p: Packet):
     """DATA and RECEIPT: take it if it is ours, else forward like any payload."""
     if p.dest == self.address:
+      if p.type == DATA:
+        self._deliver(p, lane)
+        return
       handler = {
-        DATA: self._deliver,
         RECEIPT: self._handle_receipt,
-        LINK_REQUEST: self._handle_link_request,
+        LINK_REQUEST: lambda p: self._handle_link_request(p, lane),
         LINK_ACCEPT: self._handle_link_accept,
         LINK_DATA: self._handle_link_data,
       }[p.type]
@@ -923,6 +992,8 @@ class Node:
     self._spawn(path.lane.send(Packet(p.type, p.hops + 1, p.dest, path.via, p.payload)))
 
   def _handle_path_request(self, lane: _Lane, p: Packet):
+    if not lane.allow('request', self.ingress):
+      return
     if p.dest == self.address:
       # whoever asks may not know us yet: include the keyset
       self._spawn(self._delayed(self.announce, None, True))
@@ -938,7 +1009,9 @@ class Node:
       fwd = Packet(PATH_REQUEST, p.hops + 1, p.dest, None, p.payload)
       self._spawn(self._delayed(self._broadcast, fwd))
 
-  def _deliver(self, p: Packet):
+  def _deliver(self, p: Packet, lane: _Lane | None = None):
+    if lane is not None and not lane.allow('message', self.ingress):
+      return
     try:
       m = msg.unseal(
         self.identity,
@@ -989,6 +1062,7 @@ class Node:
     if now < self._rediscover_at.get(address, 0.0):
       return
     self._rediscover_at[address] = now + self.retry_after
+    self._prune(self._rediscover_at)
     self._spawn(self.request_path(address, self.retry_after, fresh=True))
 
   def _handle_receipt(self, p: Packet):
@@ -999,13 +1073,15 @@ class Node:
     for cb in self._receipt_handlers:
       self._call(cb, o.message, o.address)
 
-  def _handle_link_request(self, p: Packet):
+  def _handle_link_request(self, p: Packet, lane: _Lane | None = None):
     if not self.accept_links:
       return
     lid = L.link_id(p.payload)
     if lid in self._accepts:  # a repeat: our accept may have been lost
       peer, accept = self._accepts[lid]
       self._spawn(self._send_data(peer, accept, LINK_ACCEPT))
+      return
+    if lane is not None and not lane.allow('link', self.ingress):
       return
     try:
       peer, accept, keys = L.accept_request(
