@@ -151,10 +151,9 @@ Legend: [ ] todo, [~] partly done
 14. [x] **Live cross-implementation runner.** Done: `interop/live.py` (6
     checks against an echo bot over UDP/WebSocket); the reference echo bot
     now also echoes resources and passes 6/6 (tested).
-15. [ ] **Arduino porting note:** the X-Wing HPKE glue over wolfCrypt, the
-    HPKE-0/-0-KE key-alg retag, the memory budget for PQ keys and signatures
-    on an ESP32, keeping the announce sequence without an RTC, and which
-    tables to bound.
+15. [x] **Porting note.** Done: PORTING.md (order of work with the vectors
+    for each layer, library map for Python/JS/Arduino, wolfCOSE glue, memory
+    budget and small-MCU limits, no-RTC operation, roads on an MCU, JS notes).
 16. [ ] **Version policy:** what bumps `VERSION`, and the plan for when the PQ
     HPKE COSE ids (56/57, 62–65) are registered.
 

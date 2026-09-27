@@ -8,7 +8,8 @@ X-Wing (ML-KEM-768 + X25519), and ML-DSA signatures.
 
 This is the reference implementation and test oracle for the JS and Arduino
 ([wolfCOSE](https://www.wolfssl.com/products/wolfcose/)/wolfSSL) ports.
-The wire format is in [SPEC.md](SPEC.md) (and as CDDL in [cosiechat.cddl](cosiechat.cddl)), known limits are in [CAVEATS.md](CAVEATS.md),
+The wire format is in [SPEC.md](SPEC.md) (and as CDDL in [cosiechat.cddl](cosiechat.cddl)), how to
+build another implementation is in [PORTING.md](PORTING.md), known limits are in [CAVEATS.md](CAVEATS.md),
 and runnable examples (including a UDP echo bot) are in [examples/](examples/).
 
 * An **address** is the hash of a public keyset. Announcing it tells the mesh
