@@ -12,6 +12,7 @@ import json
 
 from . import cbor, cose
 from . import keys as K
+from . import link as L
 from . import message as M
 from . import packet as P
 from .identity import SUITES, Identity
@@ -212,6 +213,46 @@ def generate() -> dict:
       {'suite': suite, 'data': _hex(pkt.encode()), 'hash': _hex(pkt.hash), 'type': 'ANNOUNCE'}
     )
 
+  out['links'] = []
+  for suite in ('pq', 'prequantum'):
+    a, b = Identity.generate(suite), Identity.generate(suite)
+    rb = new_ratchet(b.kem_key.alg)
+    pending = L.make_request(a, b.public(), rb.public())
+    eph = pending.ephemeral
+    _, accept, kb = L.accept_request(
+      b, pending.request, {a.address: a.public()}.get, ratchets=[rb], quantum_safe_only=False
+    )
+    ka = L.finish(pending, accept)
+    out['links'].append(
+      {
+        'suite': suite,
+        'initiator': _hex(a.to_bytes()),
+        'responder': _hex(b.to_bytes()),
+        'responder_ratchets': [_key(rb)],
+        # normally deleted right after the accept; here so accept can be checked
+        'initiator_ephemeral': _key(eph),
+        'request': _hex(pending.request),
+        'accept': _hex(accept),
+        'expect': {
+          'link_id': _hex(ka.link_id),
+          'key_a_to_b': _hex(ka.send_key.priv),
+          'key_b_to_a': _hex(ka.recv_key.priv),
+        },
+        'messages': [
+          {
+            'from': 'initiator',
+            'data': _hex(L.seal(ka, L.message_body(b.address, 'hi over the link'))),
+            'content': 'hi over the link',
+          },
+          {
+            'from': 'responder',
+            'data': _hex(L.seal(kb, L.message_body(a.address, 'and back'))),
+            'content': 'and back',
+          },
+        ],
+      }
+    )
+
   frame = P.Packet(P.PATH_REQUEST, 0, b'\x11' * 16, None, b'\x22' * 8).encode()
   out['road_auth'] = [
     {
@@ -320,6 +361,39 @@ def check(vectors: dict) -> list[str]:
       expect(p.hash.hex() == v['hash'] and P.TYPES[p.type] == v['type'], what)
     except Exception as e:
       fails.append(f'{what}: {e!r}')
+
+  for n, v in enumerate(vectors.get('links', [])):
+    what = f'link[{n}] {v["suite"]}'
+    try:
+      a = Identity.from_bytes(bytes.fromhex(v['initiator']))
+      b = Identity.from_bytes(bytes.fromhex(v['responder']))
+      request = bytes.fromhex(v['request'])
+      sender, _, part_a = L.read_request(
+        b,
+        request,
+        {a.address: a.public()}.get,
+        ratchets=[_k(h) for h in v['responder_ratchets']],
+        quantum_safe_only=False,
+      )
+      pending = L.PendingLink(
+        L.link_id(request), b.address, request, _k(v['initiator_ephemeral']), part_a
+      )
+      ka = L.finish(pending, bytes.fromhex(v['accept']))
+      e = v['expect']
+      expect(
+        sender.address == a.address
+        and ka.link_id.hex() == e['link_id']
+        and ka.send_key.priv.hex() == e['key_a_to_b']
+        and ka.recv_key.priv.hex() == e['key_b_to_a'],
+        what + ' keys',
+      )
+      kb = L.LinkKeys(ka.link_id, a.address, False, ka.recv_key, ka.send_key)
+      for i, lm in enumerate(v['messages']):
+        keys, me = (kb, b.address) if lm['from'] == 'initiator' else (ka, a.address)
+        got, _ = L.read_message(keys, me, L.unseal(keys, bytes.fromhex(lm['data'])))
+        expect(got.content == lm['content'], f'{what} message[{i}]')
+    except Exception as ex:
+      fails.append(f'{what}: {ex!r}')
 
   for n, v in enumerate(vectors.get('road_auth', [])):
     what = f'road_auth[{n}] {v["mode"]}'

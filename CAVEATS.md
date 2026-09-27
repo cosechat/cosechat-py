@@ -66,7 +66,8 @@ Known limits of cosiechat as it stands. The wire format is in
 
 ## Protocol gaps (vs Reticulum / LXMF)
 
-* No links (sessions), delivery proofs, resources (large transfers),
+* Links have no keepalive or idle timeout: they last until `close_link()`,
+  a restart, or a new link to the same peer. No resources (large transfers),
   stamps/proof-of-work, propagation-node sync, or named destinations
   (app name + aspects).
 * **Retransmission is whole-message.** Receipts and resends (SPEC §9.1) make

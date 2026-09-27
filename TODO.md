@@ -99,7 +99,10 @@ Legend: [ ] todo, [~] in progress, [x] done
    Let the receiver ask for just the missing fragments (a NACK listing
    indexes for a fragment id), or add FEC. `test_lossy_lora_road_still_delivers_once`
    shows the problem.
-3. [ ] **Sessions (like Reticulum Links).** Each PQ message carries about 4.5 KB
+3. [x] **Sessions (links).** Done (SPEC §9.2, `link.py`): X-Wing handshake
+   with one ML-DSA signature, per-link forward secrecy, ~140-byte messages.
+   Still to add: keepalive and idle timeout, link-level MTU hints.
+   Original note: **Sessions (like Reticulum Links).** Each PQ message carries about 4.5 KB
    of fixed overhead (3.3 KB ML-DSA signature + 1.1 KB X-Wing). Handshake once
    (X-Wing to the peer's ratchet, signed both ways), then symmetric AEAD per
    message (tens of bytes). Gives per-session forward secrecy. Keep

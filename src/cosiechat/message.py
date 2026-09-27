@@ -89,6 +89,8 @@ class Message:
   ratchet_id: bytes | None = None
   # the sender wants a receipt: send receipt_tag(secret, our address) back
   receipt_secret: bytes | None = None
+  # set when it came over a link (then it is authenticated by the link key, not signed)
+  link_id: bytes | None = None
 
   @property
   def time(self) -> float:

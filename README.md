@@ -25,6 +25,9 @@ and runnable examples (including a UDP echo bot) are in [examples/](examples/).
 * **Storage is yours.** The library does no file I/O and trusts no dates: how
   keys are stored, encrypted at rest, rotated and deleted is the application's
   call. [examples/storage.py](examples/storage.py) shows a suggested practice.
+* **Links** (sessions): one PQ handshake, then ~140-byte messages, with
+  per-link forward secrecy. `await node.open_link(peer)`, then `send()` uses it.
+* **Delivery receipts**: 24-byte proofs, resends until confirmed. `await node.delivered(m)`.
 * **One recipient per message**, as in LXMF. Multi-recipient messages exist as an extra.
 * **Quantum-safe by default.** The `pq` suite is the default, and nodes ignore non-PQ peers unless
   you opt out with `quantum_safe_only=False` / `--allow-prequantum`. See [CAVEATS.md](CAVEATS.md).
@@ -38,6 +41,7 @@ src/cosiechat/
   identity.py   keyset -> address, suites (pq / hybrid / prequantum)
   message.py    seal / unseal, announces
   ratchet.py    ratchet keys (forward secrecy): mechanism only, no clocks
+  link.py       sessions: PQ handshake, then symmetric messages
   packet.py     packets, fragmentation, road auth (Mac0 / Encrypt0 per frame)
   node.py       routing: announces, paths, via-forwarding, path requests, store & forward
   roads/        memory, udp, websocket, rnode (+ kiss)
@@ -47,7 +51,7 @@ interop/wolfcose/   C checker: runs the vectors through stock wolfCOSE
 examples/           storage policy, chat, echo bot + client, mesh simulation, LoRa gateway
 ```
 
-The data library (`keys`, `cose`, `identity`, `message`, `ratchet`, `packet`)
+The data library (`keys`, `cose`, `identity`, `message`, `ratchet`, `link`, `packet`)
 does no I/O. Roads know nothing about crypto. `Node` joins the two. Nothing
 in the library stores keys or expires them by time.
 
@@ -55,7 +59,7 @@ in the library stores keys or expires them by time.
 
 ```sh
 uv sync --all-extras
-uv run pytest                      # 149 tests, no hardware needed
+uv run pytest                      # 174 tests, no hardware needed
 uv run cosiechat keygen -o me.key  # dev tool: new identity (plain keyset)
 uv run cosiechat info me.key
 uv run examples/chat.py --name alice --udp 4242

@@ -31,6 +31,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from . import link as L
 from . import message as msg
 from .identity import Identity
 from .keys import Key
@@ -38,8 +39,12 @@ from .packet import (
   ANNOUNCE,
   DATA,
   FRAGMENT_OVERHEAD,
+  LINK_ACCEPT,
+  LINK_DATA,
+  LINK_REQUEST,
   PATH_REQUEST,
   RECEIPT,
+  ROUTED,
   Packet,
   PacketError,
   Reassembler,
@@ -69,8 +74,9 @@ class Path:
 @dataclass
 class _Outgoing:
   message: msg.Message
-  recipient: Identity
+  address: bytes
   future: asyncio.Future
+  reseal: Callable[[], tuple[bytes, int]]  # fresh (payload, packet type) for each (re)send
 
 
 class _Lane:
@@ -110,6 +116,7 @@ class Node:
     retry_after: float = 30.0,
     retry_max: float = 600.0,
     max_attempts: int = 4,
+    accept_links: bool = True,
     name: str | None = None,
   ):
     self.identity = identity or Identity.generate()
@@ -150,6 +157,12 @@ class Node:
     self._outbox: dict[bytes, _Outgoing] = {}  # receipt tag -> pending send
     self._deliveries: OrderedDict[bytes, list[asyncio.Future]] = OrderedDict()
     self._delivered: OrderedDict[bytes, None] = OrderedDict()  # message ids we handed over
+    # links (sessions, see link.py): live in memory only, closed explicitly
+    self.accept_links = accept_links
+    self.links: dict[bytes, L.LinkKeys] = {}  # link id -> keys
+    self._link_to: dict[bytes, bytes] = {}  # peer address -> link id
+    self._pending_links: dict[bytes, tuple[L.PendingLink, asyncio.Future]] = {}
+    self._accepts: OrderedDict[bytes, tuple[bytes, bytes]] = OrderedDict()  # id -> (peer, accept)
     self.name = name or self.identity.address.hex()[:8]
 
     self.lanes: list[_Lane] = []
@@ -297,29 +310,11 @@ class Node:
     await node.delivered(message) to find out.
     """
     targets = to if isinstance(to, (list, tuple)) else [to]
-    recipients = []
-    for t in targets:
-      if isinstance(t, Identity):
-        self.identities.setdefault(t.address, t.public())
-        t = t.address
-      if t not in self.paths:
-        # no route yet: ask the mesh; without one we still flood to neighbours
-        # and propagation nodes
-        await self.request_path(t, timeout)
-      ident = self.identities.get(t)
-      if ident is None:
-        raise LookupError(f'no identity known for {t.hex()}')
-      if self.quantum_safe_only and not ident.quantum_safe:
-        raise PermissionError(f'{t.hex()} is not quantum-safe; refusing to send')
-      if self.forward_secrecy and self.peer_ratchet(t) is None:
-        # no ratchet from this peer yet: ask for a fresh announce
-        await self.request_path(t, timeout, fresh=True)
-        if self.peer_ratchet(t) is None:
-          raise LookupError(
-            f'no current ratchet for {t.hex()}; it must announce '
-            '(or use forward_secrecy=False to send to its long-term key)'
-          )
-      recipients.append(ident)
+    if len(targets) == 1:
+      addr = targets[0].address if isinstance(targets[0], Identity) else targets[0]
+      if addr in self._link_to:
+        return await self._send_on_link(addr, content, title, fields, receipt)
+    recipients = [await self._resolve(t, timeout) for t in targets]
     m = msg.sign_message(
       self.identity,
       recipients,
@@ -329,27 +324,119 @@ class Node:
       attach_identity=attach_identity,
       receipt_secret=os.urandom(msg.RECEIPT_SECRET_SIZE) if receipt else None,
     )
-    futs = []
     for r in recipients:
-      await self._send_data(r.address, self._envelope(m, r))
-      if receipt:
-        o = _Outgoing(m, r, asyncio.get_running_loop().create_future())
-        self._outbox[msg.receipt_tag(m.receipt_secret, r.address)] = o
-        futs.append(o.future)
-        self._spawn(self._retry(o))
-    if receipt:
-      self._deliveries[m.id] = futs
-      while len(self._deliveries) > 1000:
-        self._deliveries.popitem(last=False)
+      # every (re)send is a fresh envelope around the same signed message: a new
+      # packet hash gets past duplicate filters, and the newest ratchet is used
+      def reseal(r=r):
+        return msg.envelope(m.signed, r, self.peer_ratchet(r.address)), DATA
+
+      await self._dispatch(m, r.address, reseal, receipt)
     return m
 
-  def _envelope(self, m: msg.Message, r: Identity) -> bytes:
-    # every (re)send is a fresh envelope around the same signed message: a new
-    # packet hash gets past duplicate filters, and the newest ratchet is used
-    return msg.envelope(m.signed, r, self.peer_ratchet(r.address))
+  async def _resolve(self, t, timeout: float) -> Identity:
+    """A recipient we may send to: known identity, quantum-safe, with a ratchet."""
+    if isinstance(t, Identity):
+      self.identities.setdefault(t.address, t.public())
+      t = t.address
+    if t not in self.paths:
+      # no route yet: ask the mesh; without one we still flood to neighbours
+      # and propagation nodes
+      await self.request_path(t, timeout)
+    ident = self.identities.get(t)
+    if ident is None:
+      raise LookupError(f'no identity known for {t.hex()}')
+    if self.quantum_safe_only and not ident.quantum_safe:
+      raise PermissionError(f'{t.hex()} is not quantum-safe; refusing to send')
+    if self.forward_secrecy and self.peer_ratchet(t) is None:
+      # no ratchet from this peer yet: ask for a fresh announce
+      await self.request_path(t, timeout, fresh=True)
+      if self.peer_ratchet(t) is None:
+        raise LookupError(
+          f'no current ratchet for {t.hex()}; it must announce '
+          '(or use forward_secrecy=False to send to its long-term key)'
+        )
+    return ident
+
+  async def _dispatch(self, m: msg.Message, addr: bytes, reseal, receipt: bool):
+    payload, kind = reseal()
+    await self._send_data(addr, payload, kind)
+    if not receipt:
+      return
+    o = _Outgoing(m, addr, asyncio.get_running_loop().create_future(), reseal)
+    self._outbox[msg.receipt_tag(m.receipt_secret, addr)] = o
+    self._deliveries.setdefault(m.id, []).append(o.future)
+    while len(self._deliveries) > 1000:
+      self._deliveries.popitem(last=False)
+    self._spawn(self._retry(o))
+
+  # --- links ---
+
+  def link_to(self, address: bytes) -> L.LinkKeys | None:
+    lid = self._link_to.get(address)
+    return self.links.get(lid) if lid else None
+
+  async def open_link(self, to, timeout: float = 30.0) -> L.LinkKeys:
+    """
+    Set up a session with a peer (one PQ handshake), after which send() to it
+    costs tens of bytes per message. Either side's send() uses it until closed.
+    """
+    peer = await self._resolve(to, timeout)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    wait = self.retry_after
+    while True:
+      # a fresh request per attempt (each has its own link id and packet hash)
+      pending = L.make_request(self.identity, peer, self.peer_ratchet(peer.address))
+      fut = loop.create_future()
+      self._pending_links[pending.link_id] = (pending, fut)
+      await self._send_data(peer.address, pending.request, LINK_REQUEST)
+      left = deadline - loop.time()
+      try:
+        return await asyncio.wait_for(fut, min(wait, left))
+      except TimeoutError:
+        self._pending_links.pop(pending.link_id, None)
+        if loop.time() >= deadline:
+          raise TimeoutError(f'no link accept from {peer.address.hex()}') from None
+        wait = min(wait * 2, self.retry_max)
+
+  async def close_link(self, address: bytes):
+    keys = self.link_to(address)
+    if keys is None:
+      return
+    body = L.message_body(address, close=True)
+    await self._send_data(address, L.seal(keys, body), LINK_DATA)
+    self._drop_link(keys.link_id)
+
+  def _drop_link(self, lid: bytes):
+    keys = self.links.pop(lid, None)
+    if keys and self._link_to.get(keys.peer) == lid:
+      del self._link_to[keys.peer]
+
+  def _add_link(self, keys: L.LinkKeys):
+    old = self._link_to.get(keys.peer)
+    if old and old != keys.link_id:
+      self.links.pop(old, None)
+    self.links[keys.link_id] = keys
+    self._link_to[keys.peer] = keys.link_id
+
+  async def _send_on_link(self, addr, content, title, fields, receipt) -> msg.Message:
+    keys = self.link_to(addr)
+    secret = os.urandom(msg.RECEIPT_SECRET_SIZE) if receipt else None
+    body = L.message_body(addr, content, title, fields, secret)
+    m, _ = L.read_message(keys, addr, body)
+    m.sender = self.address
+
+    def reseal():
+      live = self.link_to(addr)
+      if live is None:
+        raise LookupError('link closed')
+      return L.seal(live, body), LINK_DATA  # fresh IV each time
+
+    await self._dispatch(m, addr, reseal, receipt)
+    return m
 
   async def _retry(self, o: _Outgoing):
-    tag = msg.receipt_tag(o.message.receipt_secret, o.recipient.address)
+    tag = msg.receipt_tag(o.message.receipt_secret, o.address)
     wait = self.retry_after
     try:
       for attempt in range(1, self.max_attempts + 1):
@@ -360,8 +447,12 @@ class Node:
           pass
         if attempt == self.max_attempts:
           break
-        log.debug('%s: resending %s to %s', self, o.message.id.hex()[:8], o.recipient.address.hex())
-        await self._send_data(o.recipient.address, self._envelope(o.message, o.recipient))
+        log.debug('%s: resending %s to %s', self, o.message.id.hex()[:8], o.address.hex())
+        try:
+          payload, kind = o.reseal()
+        except LookupError:
+          break
+        await self._send_data(o.address, payload, kind)
         wait = min(wait * 2, self.retry_max)
       if not o.future.done():
         o.future.set_result(False)
@@ -436,7 +527,7 @@ class Node:
     log.debug('%s: %r on %s', self, item, lane.road)
     if item.type == ANNOUNCE:
       self._handle_announce(lane, item)
-    elif item.type in (DATA, RECEIPT):
+    elif item.type in ROUTED:
       self._handle_data(lane, item)
     elif item.type == PATH_REQUEST:
       self._handle_path_request(lane, item)
@@ -486,10 +577,14 @@ class Node:
   def _handle_data(self, lane: _Lane, p: Packet):
     """DATA and RECEIPT: take it if it is ours, else forward like any payload."""
     if p.dest == self.address:
-      if p.type == RECEIPT:
-        self._handle_receipt(p)
-      else:
-        self._deliver(p)
+      handler = {
+        DATA: self._deliver,
+        RECEIPT: self._handle_receipt,
+        LINK_REQUEST: self._handle_link_request,
+        LINK_ACCEPT: self._handle_link_accept,
+        LINK_DATA: self._handle_link_data,
+      }[p.type]
+      handler(p)
       return
     if not self.transport:
       return
@@ -546,6 +641,10 @@ class Node:
       log.debug('%s: dropped message from non-quantum-safe %s', self, m.sender.hex())
       return
     self.identities.setdefault(m.sender, sender)
+    self._accept_message(m)
+
+  def _accept_message(self, m: msg.Message):
+    """Receipt (always), then hand to the application once per message id."""
     if m.receipt_secret is not None:
       # always answer, even for a repeat: our last receipt may have been lost
       tag = msg.receipt_tag(m.receipt_secret, self.address)
@@ -564,7 +663,64 @@ class Node:
       return
     o.future.set_result(True)
     for cb in self._receipt_handlers:
-      self._call(cb, o.message, o.recipient.address)
+      self._call(cb, o.message, o.address)
+
+  def _handle_link_request(self, p: Packet):
+    if not self.accept_links:
+      return
+    lid = L.link_id(p.payload)
+    if lid in self._accepts:  # a repeat: our accept may have been lost
+      peer, accept = self._accepts[lid]
+      self._spawn(self._send_data(peer, accept, LINK_ACCEPT))
+      return
+    try:
+      peer, accept, keys = L.accept_request(
+        self.identity,
+        p.payload,
+        self.identities.get,
+        ratchets=self.ratchets,
+        require_ratchet=self.forward_secrecy,
+        quantum_safe_only=self.quantum_safe_only,
+      )
+    except Exception as e:
+      log.debug('%s: bad link request: %r', self, e)
+      return
+    if self.quantum_safe_only and not peer.quantum_safe:
+      return
+    self.identities.setdefault(peer.address, peer)
+    self._add_link(keys)
+    self._accepts[lid] = (peer.address, accept)
+    while len(self._accepts) > 256:
+      self._accepts.popitem(last=False)
+    self._spawn(self._send_data(peer.address, accept, LINK_ACCEPT))
+
+  def _handle_link_accept(self, p: Packet):
+    entry = self._pending_links.pop(p.payload[: L.LINK_ID_SIZE], None)
+    if entry is None:
+      return
+    pending, fut = entry
+    try:
+      keys = L.finish(pending, p.payload)
+    except Exception as e:
+      log.debug('%s: bad link accept: %r', self, e)
+      return
+    self._add_link(keys)
+    if not fut.done():
+      fut.set_result(keys)
+
+  def _handle_link_data(self, p: Packet):
+    keys = self.links.get(p.payload[: L.LINK_ID_SIZE])
+    if keys is None:
+      return
+    try:
+      m, close = L.read_message(keys, self.address, L.unseal(keys, p.payload))
+    except Exception as e:
+      log.debug('%s: bad link message: %r', self, e)
+      return
+    if close:
+      self._drop_link(keys.link_id)
+      return
+    self._accept_message(m)
 
   def _call(self, cb, *args):
     try:

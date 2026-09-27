@@ -335,11 +335,13 @@ passphrase-encrypted at rest.
 packet = [ version, type, hops, dest, via, payload ]
   version uint, 0 for this draft
   type    0 ANNOUNCE | 1 DATA | 2 PATH_REQUEST | 4 RECEIPT
+          | 5 LINK_REQUEST | 6 LINK_ACCEPT | 7 LINK_DATA
   hops    uint, hops travelled so far (originator sends 0)
   dest    bstr .size 16
   via     bstr .size 16 / null   the transport node that should forward it
   payload bstr   announce | sealed message | 8-byte random tag (path request)
                  | receipt tag (16) || random nonce (8)
+                 | link request | link accept | link message (§9.2)
 
 packet hash = SHA-256(CBOR [version, type, dest, payload])   ; hops and via excluded
 ```
@@ -394,7 +396,7 @@ too) and a path table `dest → (road, via, hops, announce time)`.
   address: `hops + 1`, `via = our path.via`, send on our path's road.
   A propagation node also takes `via = null` DATA; with no path it holds the
   sealed payload and forwards it when the destination announces.
-* **RECEIPT** packets are routed exactly like DATA (including by
+* **RECEIPT and LINK_*** packets are routed exactly like DATA (including by
   propagation nodes).
 * **PATH_REQUEST for dest:** the destination announces. A transport node with
   a path replies on the arrival road with the cached announce
@@ -427,6 +429,57 @@ clock.
 In a message with several recipients, every recipient knows the secret, so
 recipients could forge each other's receipts. That is acceptable for this
 extra (§6.1).
+
+### 9.2 Links (sessions)
+
+A sealed PQ message costs about 4.5 KB of fixed overhead: a 3.3 KB ML-DSA
+signature and a 1.1 KB X-Wing encapsulation. A **link** pays for one PQ
+handshake, after which each message is a symmetric COSE_Encrypt0 (about
+140 bytes on the wire for a short text with a receipt). Like Reticulum's Links.
+
+```
+request  (LINK_REQUEST, initiator A -> B):
+  COSE_Encrypt0 to B's ratchet (kid = ratchet id), exactly like a message envelope, of
+    A's signature over CBOR { 1: A's ephemeral KEM public COSE_Key (same KEM as A's identity),
+                              2: part_a (bstr .size 32, random),
+                              3: B's address }
+
+link id  = SHA-256(request)[0:16]
+
+accept   (LINK_ACCEPT, B -> A):
+  link id || COSE_Encrypt0, HPKE to A's ephemeral key, of CBOR { 1: part_b (bstr .size 32, random) }
+             external_aad = SHA-256(request)
+
+keys     = HKDF-SHA-256(ikm = part_a || part_b, salt = link id, info = "cosiechat link", L = 64)
+A->B key = keys[0:32], B->A key = keys[32:64]      (ChaCha20/Poly1305, alg 24)
+
+message  (LINK_DATA, either way):
+  link id || COSE_Encrypt0(direction key, random 12-byte IV, external_aad = link id) of
+    the message body (§6), with 7: true meaning "closing this link"
+link message id = SHA-256(link id || body)
+```
+
+* A is authenticated by its signature, which also binds its ephemeral key and
+  B's address. B MUST reject a request that is not for B, is from an unknown
+  identity, carries a private key, or (by default) uses an ephemeral KEM that
+  is not quantum-safe.
+* B is authenticated without a signature: A's ephemeral key travels only
+  inside the request encrypted to B, and the accept is bound to that exact
+  request.
+* **Forward secrecy per link:** the initiator MUST delete its ephemeral
+  private key once the accept is processed. The keys need part_b, which only
+  that deleted key can recover, so recorded link traffic stays sealed even if
+  both identities and all ratchets are later stolen. Link keys live only as
+  long as the link (in memory in the reference).
+* Link messages are authenticated by a key only A and B hold, but not signed:
+  a recipient cannot prove to a third party who wrote them.
+* The initiator retries with a **new** request (so a new link id) if no accept
+  arrives. A responder that sees the same request again MUST resend the same
+  accept (its first may have been lost).
+* Receipts (§9.1) work unchanged inside links. Resends re-encrypt the same
+  body with a new IV.
+* Once a link to a peer exists, the reference `send()` uses it in both
+  directions. `close_link()` sends the close flag and forgets the keys.
 
 ## 10. Roads
 
@@ -463,11 +516,13 @@ drives optional flow control. `LEAVE (0x0A) 0xFF` on shutdown.
 | multi-recipient | none | extra: signed once, per-recipient copies (or one shared COSE_Encrypt) |
 | sender | inside encrypted payload | protected `kid` of the signature, inside encryption |
 | ratchets | X25519, opt-in, rotation and retention built in (30 min, 512 kept) | X-Wing (PQ), on by default, rotation and retention left to storage |
-| links, resources, proofs, stamps | yes | not yet (see below) |
+| links | X25519 + Ed25519 handshake | X-Wing handshake, one ML-DSA signature, per-link forward secrecy |
+| delivery proofs | signed proofs | 24-byte HMAC receipts (§9.1) |
+| resources, stamps | yes | not yet (see below) |
 
 ## 12. Not yet specified
 
-Links (sessions), delivery proofs, propagation-node sync,
+Link keepalive and idle timeout, fragment-level resume, propagation-node sync,
 stamps/proof-of-work, resource transfer, named destinations (app name +
 aspects), path expiry policy.
 

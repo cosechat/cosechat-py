@@ -8,6 +8,7 @@ Messages are split into their two COSE layers (envelope, then signature);
 layers wolfCOSE has no algorithm for (X-Wing) are listed as skipped.
 """
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -126,6 +127,24 @@ def main():
       data,
       alice.verify(data),
     )
+
+  for n, lk in enumerate(v.get('links', [])):
+    name = f'link[{n}]:{lk["suite"]}'
+    request = bytes.fromhex(lk['request'])
+    accept = bytes.fromhex(lk['accept'])
+    eph = K.Key.from_cose(cbor.loads(bytes.fromhex(lk['initiator_ephemeral'])))
+    transcript = hashlib.sha256(request).digest()
+    if eph.alg in WOLFCOSE_ALGS:
+      part_b = cose.decrypt0(accept[16:], eph, external_aad=transcript)
+      add(name + ':accept', 'hpke0', [keyhex(eph)], accept[16:], part_b, transcript)
+    else:
+      skipped.append(name + ':accept')
+    lid = bytes.fromhex(lk['expect']['link_id'])
+    for i, lm in enumerate(lk['messages']):
+      k = lk['expect']['key_a_to_b' if lm['from'] == 'initiator' else 'key_b_to_a']
+      key = K.Key(K.CHACHA20_POLY1305, priv=bytes.fromhex(k))
+      data = bytes.fromhex(lm['data'])[16:]
+      add(f'{name}:message[{i}]', 'enc0', [keyhex(key)], data, cose.decrypt0(data, key, lid), lid)
 
   for r in v.get('road_auth', []):
     op = 'mac0' if r['mode'] == 'mac' else 'enc0'

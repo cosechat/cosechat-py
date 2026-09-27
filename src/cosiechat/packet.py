@@ -4,7 +4,8 @@ Packets: what travels on a road.
   packet   = [version, type, hops, dest, via, payload]
     version  protocol version, VERSION (0 while the spec is a draft); receivers
              drop frames with a version they do not implement
-    type     0 ANNOUNCE, 1 DATA, 2 PATH_REQUEST, 4 RECEIPT
+    type     0 ANNOUNCE, 1 DATA, 2 PATH_REQUEST, 4 RECEIPT,
+             5 LINK_REQUEST, 6 LINK_ACCEPT, 7 LINK_DATA
     hops     hops already travelled (originator sends 0)
     dest     16-byte destination address
     via      16-byte address of the transport node that should forward this, or null
@@ -38,8 +39,21 @@ DATA = 1
 PATH_REQUEST = 2
 FRAGMENT = 3
 RECEIPT = 4
+LINK_REQUEST = 5
+LINK_ACCEPT = 6
+LINK_DATA = 7
 
-TYPES = {ANNOUNCE: 'ANNOUNCE', DATA: 'DATA', PATH_REQUEST: 'PATH_REQUEST', RECEIPT: 'RECEIPT'}
+TYPES = {
+  ANNOUNCE: 'ANNOUNCE',
+  DATA: 'DATA',
+  PATH_REQUEST: 'PATH_REQUEST',
+  RECEIPT: 'RECEIPT',
+  LINK_REQUEST: 'LINK_REQUEST',
+  LINK_ACCEPT: 'LINK_ACCEPT',
+  LINK_DATA: 'LINK_DATA',
+}
+# addressed to a node and routed like DATA
+ROUTED = {DATA, RECEIPT, LINK_REQUEST, LINK_ACCEPT, LINK_DATA}
 
 FRAGMENT_ID_SIZE = 8
 # array(1) + version(1) + type(1) + id(1+8) + index(3) + count(3) + chunk header(3)
