@@ -82,106 +82,114 @@ and will be ported from this repo. The docs are the porting guide:
 
 ## Status
 
-Done: COSE Sign1/Sign/Mac0/Mac/Encrypt0/Encrypt; identities and suites;
-sealed messages; announces with ratchets and sequence; packets, fragments and
-road auth; routing (announce flood, via-forwarding, path requests,
-store-and-forward); roads (memory, UDP, WebSocket, RNode/KISS);
-quantum-safe-only and forward-secrecy defaults; key pinning; vectors and
-checker; wolfCOSE interop; examples (storage, chat, echo bot/client,
-mesh_sim, lora_gateway).
+Working and tested (191 tests, no hardware): COSE Sign1/Sign/Mac0/Mac/Encrypt0/
+Encrypt; signing-only identities and suites; ratchets; sealed messages;
+full/short announces with keyset fetch; packets with a version, fragments and
+road auth; routing (announce flood with a 2% airtime budget, via-forwarding,
+path requests, week-long path expiry, store-and-forward); delivery receipts
+and resends; links (sessions); roads (memory, UDP, WebSocket, RNode/KISS);
+quantum-safe-only default; key pinning; vectors incl. must-reject cases;
+wolfCOSE interop (40/40); `cosiechat sizes`; examples.
 
 ## Left to do, in priority order
 
-Legend: [ ] todo, [~] in progress, [x] done
+Legend: [ ] todo, [~] partly done
 
-### A. Required for real use (especially LoRa)
+### A. Needed before real use
 
-1. [x] **Wire version.** Done: every frame is `[version, ...]`, VERSION = 0. Packets have no version. Add one (e.g. packet
-   `[version, type, ...]` or a leading version byte) before other
-   implementations ship. The PQ HPKE ids (56/57, 62–65) are still draft values.
-2. [x] **Delivery receipts and retransmission.** Done (SPEC §9.1): 24-byte
-   HMAC receipts from a secret in the message, re-sealed resends with backoff,
-   and app-level dedupe by message id. `node.delivered(m)`, `on_receipt`.
-2b. [ ] **Fragment-level resume for LoRa.** Resends are whole-message; a PQ
-   message is 10–20 LoRa frames, so at 10% frame loss most attempts fail.
-   Let the receiver ask for just the missing fragments (a NACK listing
-   indexes for a fragment id), or add FEC. `test_lossy_lora_road_still_delivers_once`
-   shows the problem.
-3. [x] **Sessions (links).** Done (SPEC §9.2, `link.py`): X-Wing handshake
-   with one ML-DSA signature, per-link forward secrecy, ~140-byte messages.
-   Still to add: keepalive and idle timeout, link-level MTU hints.
-   Original note: **Sessions (like Reticulum Links).** Each PQ message carries about 4.5 KB
-   of fixed overhead (3.3 KB ML-DSA signature + 1.1 KB X-Wing). Handshake once
-   (X-Wing to the peer's ratchet, signed both ways), then symmetric AEAD per
-   message (tens of bytes). Gives per-session forward secrecy. Keep
-   sender-authentication semantics equal to signed messages.
-4. [x] **Announce flood control.** Done (SPEC §9.0): per-road 2% airtime
-   budget from the road bitrate (RNode computes it), fewest-hops-first queue
-   with newest-per-destination and max age, 60 s per-identity rebroadcast limit,
-   cheap pre-checks before ML-DSA verification. Still to consider: ingress
-   limits (announces *received* per road per second), and stopping unchanged
-   announces from being re-flooded.
-   Original note: **Announce flood control.** Transport nodes rebroadcast every announce
-   (PQ is about 7.8 KB), which can eat a LoRa duty cycle and costs an ML-DSA
-   verify each (CPU DoS). Add per-road announce bandwidth caps (Reticulum uses
-   about 2%), per-identity rate limits, and queueing by hop count.
-5. [~] **Path upkeep.** Done: week-long path expiry on the local clock
-   (`Node.path()`, `path_ttl`). Left: noticing dead paths (e.g. after failed
-   deliveries) and preferring fewer hops. Original note: **Path upkeep.** Expire or replace dead paths, prefer fewer hops, and
-   recover when a transport node vanishes. Use only the local monotonic clock
-   for this, never peer dates.
-6. [ ] **Large transfers (like Reticulum Resources).** Chunking, windowing and
-   a whole-object hash, over sessions, for attachments.
+1. [ ] **Links must survive a peer restart.** If the peer loses its link keys
+   (restart, `close_link` lost in transit), our `send()` keeps using the link
+   and resends into the void; it never falls back to a sealed message. Fix:
+   when a link message runs out of attempts, drop the link and resend the
+   same content sealed; and/or let the peer answer an unknown link id with a
+   tiny "no such link" packet. Also cap how many links a node holds.
+2. [ ] **Link keepalive and idle timeout** (Reticulum links have both). Close
+   idle links on the local clock; detect a dead peer. Default timeouts are
+   local policy.
+3. [ ] **Fragment-level resume for LoRa.** Resends are whole-message; a PQ
+   message is 10 LoRa frames, so at 10% frame loss most attempts fail
+   (`test_lossy_lora_road_still_delivers_once` has to use 5%). Let the
+   receiver ask for the missing fragments (a NACK listing indexes for a
+   fragment id), or add FEC. Signed announces and link handshakes need it most.
+4. [ ] **Pluggable store-and-forward.** `Node.pending` is in memory only, so a
+   propagation node forgets everything on restart. Take a provider (like
+   `ratchets=`) so storage stays the application's; add an example.
+5. [~] **Path upkeep.** Done: week-long expiry (`Node.path()`, `path_ttl`).
+   Left: drop a path after repeated delivery failures, prefer fewer hops
+   among announces of the same sequence, recover when a transport vanishes.
+6. [ ] **Ingress limits.** Cap announces, keyset requests and link requests
+   *received* per road per second, and bound the in-memory tables (links,
+   keyset waits, rebroadcast timers). Today a noisy neighbour costs CPU (an
+   ML-DSA verify per announce that passes the cheap checks) and memory.
+7. [ ] **Large transfers (like Reticulum Resources):** chunking, windowing and
+   a whole-object hash, over links, for attachments. Today attachments ride
+   in `fields` inside one message.
+8. [ ] **Propagation nodes like LXMF's:** clients hand messages to a chosen
+   propagation node and later fetch theirs, instead of relying on a node that
+   happens to be on the path. Needs a small request/response protocol.
 
-### B. Required for SPEC.md to be the porting guide
+### B. Needed for SPEC.md to be the porting guide
 
-7. [ ] **CDDL** for every structure (packet, fragment, announce body, message
-   body, keyset, ratchet key, receipts and sessions once added).
-8. [x] **Must-reject vectors.** Done: `reject` in vectors.json (18 cases);
-   `check()` fails if any is accepted, and tests confirm each fails only for
-   its rule. Original note: **Must-reject vectors**: tampered data, kid mismatch, lower announce
-   sequence, bad ratchet (wrong KEM, wrong kid, has a private key), not
-   addressed to us, unknown sender, pre-quantum peer under the default policy,
-   and a long-term-key message when ratchets are required. Extend
-   `vectors.check()` to verify rejections.
-9. [ ] **Byte-exact vectors** where the output is deterministic: Ed25519,
-   HMAC, AEAD with a fixed IV, packet encodings, fragment splits with a fixed id.
-10. [ ] **Live cross-implementation runner**: one script that drives a Python
-    node against a JS or Arduino node over UDP/WebSocket (announce, message,
-    receipt, rotation, path request). `examples/echo_client.py` is a start.
-11. [ ] **Arduino porting note**: the X-Wing HPKE glue over wolfCrypt, the
+9. [ ] **CDDL** for every structure: packet, fragment, keyset, announce body,
+   ratchet key, message body, receipt, link request/accept/message, keyset
+   request/answer.
+10. [ ] **Constants and defaults table:** every number an implementation needs
+    (sizes, limits, retry/backoff, budgets, TTLs, caps like 16 trial
+    ratchets, 256 kept accepts), marked MUST vs local policy.
+11. [ ] **Node behaviour as state machines / pseudo-code** for receive, send,
+    retry, link setup and path request, so ports match behaviour and not
+    just formats.
+12. [ ] **Security considerations section** in SPEC (threat model, what
+    routers learn, DoS surfaces), pulling from CAVEATS.md.
+13. [ ] **Byte-exact vectors** where the output is deterministic: Ed25519,
+    HMAC, AEAD with a fixed IV, packet and fragment encodings, receipt tags,
+    link key derivation (from fixed parts).
+14. [ ] **Live cross-implementation runner:** one script that drives a Python
+    node against a JS or Arduino node over UDP/WebSocket (announce, keyset
+    fetch, message, receipt, link, rotation, path request).
+    `examples/echo_client.py` is a start.
+15. [ ] **Arduino porting note:** the X-Wing HPKE glue over wolfCrypt, the
     HPKE-0/-0-KE key-alg retag, the memory budget for PQ keys and signatures
-    on ESP32, and storing the announce sequence and ratchets without an RTC.
+    on an ESP32, keeping the announce sequence without an RTC, and which
+    tables to bound.
+16. [ ] **Version policy:** what bumps `VERSION`, and the plan for when the PQ
+    HPKE COSE ids (56/57, 62–65) are registered.
 
 ### C. Library quality
 
-12. [ ] Public API cleanup: decide what is public, docstrings, type hints,
-    `py.typed`. Rename or explain `seal` vs `seal_each`.
-13. [ ] `keys._hpke_seal_aad` uses a *private* `cryptography` helper
+17. [ ] Public API cleanup: decide what is public, docstrings, type hints,
+    `py.typed`; `seal_each` is library-only now (the node signs once and
+    envelopes per recipient itself).
+18. [ ] `keys._hpke_seal_aad` uses a *private* `cryptography` helper
     (`_encrypt_with_aad`). Pin the version range, and add a test that fails
     loudly if the helper goes away.
-14. [ ] Test the RNode road on real hardware (so far only the emulator in
-    `tests/test_roads.py`).
-15. [ ] Several destinations per identity (Reticulum "aspects"), or several
+19. [ ] Test the RNode road on real hardware (so far only the emulator).
+20. [ ] **Contact card:** since an address alone is not enough to message
+    someone (you need their announce), define a share format (a signed full
+    announce as a URI/QR) and a human address display with a checksum.
+21. [ ] Several destinations per identity (Reticulum "aspects"), or several
     identities per node.
-16. [ ] A human address format with a checksum, and a QR/share format for
-    address plus keyset.
-17. [ ] Packaging: versioning, a changelog, CI (tests + ruff + wolfCOSE
+22. [ ] Packaging: versioning, changelog, CI (tests + ruff + wolfCOSE
     checker), PyPI.
 
-### D. Done since the first list
+### D. Later / optional
 
-* [x] **Smaller announces.** Signing-only keysets and no nonce (full `pq`
-  announce 7,830 → 6,594 bytes), short announces without the keyset (4,627),
-  keyset fetch (KEYSET_REQUEST / KEYSET). Link messages dropped their
-  redundant `to` (149 → 130 bytes).
-* [x] `cosiechat sizes` plus a test tying SPEC §14 to the code.
+* Group and plain destinations (Reticulum GROUP/PLAIN) for broadcast channels.
+* More roads: TCP (Reticulum's common internet link), generic KISS TNCs, BLE.
+* Stamps/proof-of-work against spam (LXMF has them).
 
 ### E. Housekeeping
 
-18. [ ] Create a GitHub remote (ask the user first) and push `main`.
-19. [ ] The wolfCOSE checker binary (`interop/wolfcose/check`) is prebuilt;
+23. [ ] Create a GitHub remote (ask the user first) and push `main`.
+24. [ ] The wolfCOSE checker binary (`interop/wolfcose/check`) is prebuilt;
     rebuilding it needs wolfSSL + wolfCOSE built again (see "How to work
-    here"). The last run was 40/40 passing on the current vectors. The reject
-    vectors are not in `make_cases.py` yet (they need the node rules, not
-    only COSE).
+    here"). Last run: 40/40 on the current vectors. The reject vectors are
+    not in `make_cases.py` (they need node rules, not only COSE).
+
+### Done (for reference)
+
+Wire version; receipts and resends; links; announce flood control;
+must-reject vectors; signing-only identities, short announces and keyset
+fetch; no nonce and no `to` in link messages; path expiry; generated size
+tables. Keepalives were tried and removed on purpose (Reticulum has none;
+paths last a week instead).
