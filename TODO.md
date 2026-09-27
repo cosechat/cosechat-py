@@ -163,9 +163,9 @@ Legend: [ ] todo, [~] partly done
 17. [ ] Public API cleanup: decide what is public, docstrings, type hints,
     `py.typed`; `seal_each` is library-only now (the node signs once and
     envelopes per recipient itself).
-18. [ ] `keys._hpke_seal_aad` uses a *private* `cryptography` helper
-    (`_encrypt_with_aad`). Pin the version range, and add a test that fails
-    loudly if the helper goes away.
+18. [x] **Private `cryptography` helper guarded.** `cryptography>=50,<51`
+    and `tests/test_keys_private_api.py` (helper present, aad really bound).
+    When 51 comes out: run that test, then raise the bound.
 19. [ ] Test the RNode road on real hardware (so far only the emulator).
 20. [ ] **Contact card:** since an address alone is not enough to message
     someone (you need their announce), define a share format (a signed full

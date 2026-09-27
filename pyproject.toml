@@ -5,7 +5,10 @@ description = 'Post-quantum mesh messaging over COSE/CBOR, inspired by Reticulum
 readme = 'README.md'
 requires-python = '>=3.11'
 license = 'MIT'
-dependencies = ['cryptography>=50', 'cbor2>=5.6']
+# cryptography: upper bound because keys._hpke_seal_aad uses its private
+# `_encrypt_with_aad` (HPKE aad for COSE-HPKE Encrypt0); raise it after
+# tests/test_keys_private_api.py passes on the new version
+dependencies = ['cryptography>=50,<51', 'cbor2>=5.6']
 
 [project.optional-dependencies]
 websocket = ['websockets>=13']
