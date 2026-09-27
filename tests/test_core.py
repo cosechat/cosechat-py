@@ -424,3 +424,25 @@ def test_identity_is_signing_keys_only():
   i = Identity.generate('pq')
   assert len(cbor.loads(i.public_bytes)) == 1
   assert len(i.public_bytes) < 2000
+
+
+def test_unknown_map_keys_are_ignored():
+  """SPEC §19: new optional fields are compatible, so receivers must skip unknown keys."""
+  a, b = Identity.generate('prequantum'), Identity.generate('prequantum')
+  r = new_ratchet(a.kem_alg)
+  body = {
+    M.A_IDENTITY: a.public_bytes,
+    M.A_SEQUENCE: 1,
+    M.A_RATCHET: r.public().to_cose(),
+    99: 'from the future',
+  }
+  assert M.verify_announce(a.sign(cbor.dumps(body)), a.address).sequence == 1
+  rb = new_ratchet(b.kem_alg)
+  mbody = {M.M_TO: [b.address], M.M_TIME: 1, M.M_CONTENT: 'x', 99: 'future'}
+  sealed = M.envelope(a.sign(cbor.dumps(mbody)), rb.public())
+  assert M.unseal(b, sealed, {a.address: a.public()}.get, ratchets=[rb]).content == 'x'
+
+
+def test_unknown_packet_types_are_dropped():
+  with pytest.raises(P.PacketError):
+    P.decode(cbor.dumps([P.VERSION, 42, 0, b'\x01' * 16, None, b'']))

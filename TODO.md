@@ -154,8 +154,9 @@ Legend: [ ] todo, [~] partly done
 15. [x] **Porting note.** Done: PORTING.md (order of work with the vectors
     for each layer, library map for Python/JS/Arduino, wolfCOSE glue, memory
     budget and small-MCU limits, no-RTC operation, roads on an MCU, JS notes).
-16. [ ] **Version policy:** what bumps `VERSION`, and the plan for when the PQ
-    HPKE COSE ids (56/57, 62–65) are registered.
+16. [x] **Version policy.** Done: SPEC §19 (ignore unknown keys and packet
+    types; what is compatible and what bumps the version; the plan for the
+    PQ HPKE ids). Tested in `test_core.py`.
 
 ### C. Library quality
 

@@ -1180,3 +1180,26 @@ keep strangers off a road.
 **Not covered.** Traffic analysis beyond what is listed, a compromised device
 (its held ratchets open recent traffic), weak road passphrases, and the
 maturity of the drafts in §2 (see CAVEATS.md).
+
+## 19. Versioning
+
+The first element of every frame is the protocol version (§8). This draft is
+**version 0**; nothing has been deployed, so it can still change.
+
+* **Receivers MUST ignore map keys they do not know** in every CBOR map
+  (announce, message, link bodies, COSE headers other than `crit`), and MUST
+  drop packet types they do not know. That makes these changes
+  **compatible, no version bump**: a new optional announce or message field,
+  a new link body kind, a new packet type, a new suite or algorithm (peers
+  that lack it just cannot use it).
+* **Anything else bumps the version**: changing the meaning, encoding or
+  size of an existing field, how an address, id, key or tag is derived, a
+  COSE structure, or a MUST in this document. Nodes drop frames of versions
+  they do not implement, so old and new meshes ignore each other cleanly
+  rather than misunderstand each other.
+* **The PQ HPKE ids** (56/57 for X-Wing, 62–65 for ML-KEM) are the values
+  suggested by draft-reddy-cose-hpke-pq-pqt, not yet registered. If they are
+  registered as different numbers, that is a version bump: version 1 uses
+  the registered ids. A node MAY run both versions side by side during a move.
+* Until version 1 is declared, treat version 0 as unstable: re-check the
+  vectors after every update of this document.
