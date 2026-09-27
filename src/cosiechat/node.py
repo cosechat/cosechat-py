@@ -34,6 +34,7 @@ from typing import Any
 from . import cbor, cose
 from . import link as L
 from . import message as msg
+from . import propagation as PR
 from . import resource as R
 from .identity import Identity, address_of, signer_of
 from .keys import QUANTUM_SAFE_KEM, Key
@@ -112,6 +113,7 @@ class _Outgoing:
   reseal: Callable[[], tuple[bytes, int]]  # fresh (payload, packet type) for each (re)send
   attempts: int
   fallback: Callable | None = None  # async () -> bool, tried when attempts run out
+  secret: bytes | None = None  # the receipt secret this send is confirmed with
 
 
 class _Lane:
@@ -248,6 +250,8 @@ class Node:
     path_ttl: float = 7 * 86400,
     max_peers: int = 10000,
     max_resource: int = R.MAX_RESOURCE,
+    propagation_node: bytes | None = None,
+    auto_propagate: bool = True,
     ingress: dict | None = None,
     announce_cap: float = 0.02,
     announce_queue_age: float = 3600.0,
@@ -319,6 +323,13 @@ class Node:
     self.max_peers = max_peers
     # resources (large transfers over links): the biggest we accept
     self.max_resource = max_resource
+    # propagation: where to deposit for offline peers (None: the nearest one
+    # known from announces), and whether to do so when direct delivery fails
+    self.propagation_node = propagation_node
+    self.auto_propagate = auto_propagate
+    self.propagation_nodes: OrderedDict[bytes, None] = OrderedDict()
+    self._batches: dict[bytes, list] = {}  # (propagation node) peer -> batch handed out
+    self._fetching: dict[bytes, list] = {}  # (client) propagation node -> [items, future]
     self._res_out: dict[bytes, tuple[R.Outgoing, asyncio.Future]] = {}
     self._res_in: dict[
       tuple[bytes, bytes], list
@@ -476,6 +487,7 @@ class Node:
       app_data if app_data is not None else self.app_data,
       sequence=self._sequence,
       full=full,
+      services=PR.SERVICE_PROPAGATION if self.propagate else 0,
     )
     p = Packet(ANNOUNCE, 0, self.address, None, data)
     self._mark_seen(p.hash)
@@ -534,19 +546,22 @@ class Node:
     attach_identity: bool = False,
     timeout: float = 10.0,
     receipt: bool = True,
+    propagate: bool = False,
   ) -> msg.Message:
     """
     Seal a message for one or more recipients (addresses or Identities) and
     send it. Unknown recipients are looked up with a path request first.
     With receipt=True (default) it is resent until each recipient confirms;
-    await node.delivered(message) to find out.
+    await node.delivered(message) to find out. propagate=True hands it to a
+    propagation node instead (delivered then means "the node has it"); with
+    auto_propagate, that also happens when direct delivery gives up.
     """
     targets = to if isinstance(to, (list, tuple)) else [to]
-    if len(targets) == 1:
+    if len(targets) == 1 and not propagate:
       addr = targets[0].address if isinstance(targets[0], Identity) else targets[0]
       if addr in self._link_to:
         return await self._send_on_link(addr, content, title, fields, receipt)
-    recipients = [await self._resolve(t, timeout) for t in targets]
+    recipients = [await self._resolve(t, timeout, need_path=not propagate) for t in targets]
     m = msg.sign_message(
       self.identity,
       recipients,
@@ -562,15 +577,59 @@ class Node:
       def reseal(r=r):
         return msg.envelope(m.signed, self.peer_ratchet(r.address)), DATA
 
-      await self._dispatch(m, r.address, reseal, receipt)
+      if propagate:
+        dm = await self._deposit(m, r, receipt)
+        if receipt:  # delivered(m) then means "a propagation node has it"
+          self._deliveries.setdefault(m.id, []).extend(self._deliveries.get(dm.id, []))
+        continue
+
+      async def fallback(r=r):
+        # direct delivery gave up: leave it with a propagation node
+        self.paths.pop(r.address, None)
+        if not self.auto_propagate or self._propagation_node(exclude=r.address) is None:
+          return False
+        dm = await self._deposit(m, r, True)
+        return dm is not None and await self.delivered(dm)
+
+      await self._dispatch(m, r.address, reseal, receipt, fallback=fallback)
     return m
 
-  async def _resolve(self, t, timeout: float) -> Identity:
+  def _propagation_node(self, exclude: bytes | None = None) -> bytes | None:
+    """The configured propagation node, or the nearest one we know a path to."""
+    if self.propagation_node:
+      return self.propagation_node
+    known = [a for a in self.propagation_nodes if a != exclude and self.path(a)]
+    return min(known, key=lambda a: self.path(a).hops) if known else None
+
+  async def _deposit(self, m: msg.Message, r: Identity, receipt: bool) -> msg.Message | None:
+    """Hand `m` (sealed to r's ratchet) to a propagation node, over a link to it."""
+    node_addr = self._propagation_node(exclude=r.address)
+    if node_addr is None:
+      raise LookupError('no propagation node known')
+    keys = self.link_to(node_addr) or await self.open_link(node_addr)
+    lid = keys.link_id
+    secret = os.urandom(msg.RECEIPT_SECRET_SIZE)
+    dm = msg.Message(self.address, [r.address], m.timestamp, id=m.id + b'd', receipt_secret=secret)
+
+    def reseal():
+      live = self.link_to(node_addr)
+      if live is None or live.link_id != lid:
+        raise LookupError('link closed')
+      item = [r.address, DATA, msg.envelope(m.signed, self.peer_ratchet(r.address))]
+      body = {PR.P_DEPOSIT: item}
+      if receipt:
+        body[msg.M_RECEIPT] = secret
+      return L.seal(live, cbor.dumps(body)), LINK_DATA
+
+    await self._dispatch(dm, node_addr, reseal, receipt, secret=secret)
+    return dm
+
+  async def _resolve(self, t, timeout: float, need_path: bool = True) -> Identity:
     """A recipient we may send to: known identity, quantum-safe, with a ratchet."""
     if isinstance(t, Identity):
       self.identities.setdefault(t.address, t.public())
       t = t.address
-    if self.path(t) is None:
+    if need_path and self.path(t) is None:
       # no route yet: ask the mesh; without one we still flood to neighbours
       # and propagation nodes
       await self.request_path(t, timeout)
@@ -579,17 +638,24 @@ class Node:
       raise LookupError(f'no identity known for {t.hex()}')
     if self.quantum_safe_only and not ident.quantum_safe:
       raise PermissionError(f'{t.hex()} is not quantum-safe; refusing to send')
-    if self.peer_ratchet(t) is None:
+    if self.peer_ratchet(t) is None and need_path:
       # no ratchet from this peer yet: ask for a fresh announce
       await self.request_path(t, timeout, fresh=True)
-      if self.peer_ratchet(t) is None:
-        raise LookupError(f'no ratchet for {t.hex()}: it must announce first')
+    if self.peer_ratchet(t) is None:
+      raise LookupError(f'no ratchet for {t.hex()}: it must announce first')
     if self.quantum_safe_only and self.peer_ratchet(t).alg not in QUANTUM_SAFE_KEM:
       raise PermissionError(f'{t.hex()} announced a ratchet that is not quantum-safe')
     return ident
 
   async def _dispatch(
-    self, m: msg.Message, addr: bytes, reseal, receipt: bool, attempts=None, fallback=None
+    self,
+    m: msg.Message,
+    addr: bytes,
+    reseal,
+    receipt: bool,
+    attempts=None,
+    fallback=None,
+    secret: bytes | None = None,
   ):
     payload, kind = reseal()
     await self._send_data(addr, payload, kind)
@@ -602,8 +668,9 @@ class Node:
       reseal,
       attempts or self.max_attempts,
       fallback,
+      secret or m.receipt_secret,
     )
-    self._outbox[msg.receipt_tag(m.receipt_secret, addr)] = o
+    self._outbox[msg.receipt_tag(o.secret, addr)] = o
     self._deliveries.setdefault(m.id, []).append(o.future)
     while len(self._deliveries) > DELIVERY_RESULTS:
       self._deliveries.popitem(last=False)
@@ -695,7 +762,7 @@ class Node:
     return m
 
   async def _retry(self, o: _Outgoing):
-    tag = msg.receipt_tag(o.message.receipt_secret, o.address)
+    tag = msg.receipt_tag(o.secret, o.address)
     wait = self.retry_after
     try:
       for attempt in range(1, o.attempts + 1):
@@ -890,6 +957,10 @@ class Node:
     self.announces[p.dest] = (p.payload, ann)
     self.peer_ratchets[p.dest] = ann.ratchet
     self._heard(p.dest)
+    if ann.services & PR.SERVICE_PROPAGATION:
+      self.propagation_nodes[p.dest] = None
+    else:
+      self.propagation_nodes.pop(p.dest, None)
     path = self._update_path(lane, p, ann.sequence)
     for cb in self._announce_handlers:
       self._call(cb, ann, path)
@@ -1006,7 +1077,10 @@ class Node:
     if waiting is not None:
       self._handle_announce(*waiting)
     for m in messages:
-      self._deliver(m)
+      if m.type == LINK_REQUEST:
+        self._handle_link_request(m)
+      else:
+        self._deliver(m)
 
   def _handle_data(self, lane: _Lane, p: Packet):
     """DATA and RECEIPT: take it if it is ours, else forward like any payload."""
@@ -1073,10 +1147,7 @@ class Node:
       )
     except msg.SenderUnknown as e:
       # e.g. we restarted and forgot them: fetch their keyset, then try again
-      q = self._waiting_messages.setdefault(e.address, [])
-      if len(q) < WAITING_PER_SENDER and len(self._waiting_messages) <= WAITING_SENDERS:
-        q.append(p)
-      self._request_keyset(e.address)
+      self._wait_for_keyset(e.address, p)
       return
     except Exception as e:
       log.debug('%s: could not open message: %r', self, e)
@@ -1108,6 +1179,13 @@ class Node:
     for cb in self._message_handlers:
       self._call(cb, m)
 
+  def _wait_for_keyset(self, address: bytes, p: Packet):
+    """Hold a message or link request from an unknown sender; fetch its keyset."""
+    q = self._waiting_messages.setdefault(address, [])
+    if len(q) < WAITING_PER_SENDER and len(self._waiting_messages) <= WAITING_SENDERS:
+      q.append(p)
+    self._request_keyset(address)
+
   def _rediscover(self, address: bytes):
     """Ask for a fresh path to `address`, at most once per retry_after."""
     now = time.monotonic()
@@ -1116,6 +1194,86 @@ class Node:
     self._rediscover_at[address] = now + self.retry_after
     self._prune(self._rediscover_at)
     self._spawn(self.request_path(address, self.retry_after, fresh=True))
+
+  # --- propagation nodes ---
+
+  async def fetch(self, timeout: float = 30.0, node: bytes | None = None) -> int:
+    """
+    Collect what a propagation node holds for us (over a link, so it knows it
+    is really us). Returns how many items came; they are handled as if they
+    had just arrived (messages go to on_message, receipts to on_receipt).
+    """
+    node = node or self._propagation_node()
+    if node is None:
+      raise LookupError('no propagation node known')
+    keys = self.link_to(node) or await self.open_link(node, timeout)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    fut = loop.create_future()
+    self._fetching[node] = [{}, fut]
+    try:
+      while True:
+        await self._send_data(node, L.seal(keys, cbor.dumps({PR.P_FETCH: True})), LINK_DATA)
+        left = deadline - loop.time()
+        if left <= 0:
+          raise TimeoutError('propagation node did not answer')
+        try:
+          return await asyncio.wait_for(asyncio.shield(fut), min(self.retry_after, left))
+        except TimeoutError:
+          pass  # ask again: the node resends the same batch
+    finally:
+      self._fetching.pop(node, None)
+
+  def _handle_propagation(self, keys: L.LinkKeys, body: dict):
+    peer = keys.peer
+    send = self._resource_send  # (keys, field, value) -> seal and send over the link
+    if PR.P_DEPOSIT in body and self.propagate:
+      item = body[PR.P_DEPOSIT]
+      if not (isinstance(item, list) and len(item) == 3):
+        return
+      dest, kind, payload = item
+      if kind not in (DATA, RECEIPT) or not isinstance(payload, bytes):
+        return
+      if self.store.put(dest, kind, payload):
+        secret = body.get(msg.M_RECEIPT)
+        if isinstance(secret, bytes) and len(secret) == msg.RECEIPT_SECRET_SIZE:
+          tag = msg.receipt_tag(secret, self.address)
+          self._spawn(self._send_data(peer, tag + os.urandom(RECEIPT_NONCE_SIZE), RECEIPT))
+    elif PR.P_FETCH in body and self.propagate:
+      # the link authenticated the peer: hand over what we hold for it
+      batch = self._batches.get(peer)
+      if batch is None:
+        batch = self.store.take(peer)[: PR.BATCH]
+        self._batches[peer] = batch
+      for i, (kind, payload) in enumerate(batch):
+        send(keys, PR.P_ITEM, [i, kind, payload])
+      send(keys, PR.P_END, len(batch))
+    elif PR.P_ACK in body:
+      batch = self._batches.get(peer)
+      if batch is not None and body[PR.P_ACK] == len(batch):
+        del self._batches[peer]
+    elif PR.P_ITEM in body:
+      entry = self._fetching.get(peer)
+      if entry and isinstance(body[PR.P_ITEM], list) and len(body[PR.P_ITEM]) == 3:
+        i, kind, payload = body[PR.P_ITEM]
+        entry[0][i] = (kind, payload)
+    elif PR.P_END in body:
+      entry = self._fetching.get(peer)
+      n = body[PR.P_END]
+      if entry is None or entry[1].done() or not isinstance(n, int):
+        return
+      items, fut = entry
+      if any(i not in items for i in range(n)):
+        return  # something got lost: fetch() asks again and gets the same batch
+      send(keys, PR.P_ACK, n)
+      for i in range(n):
+        kind, payload = items[i]
+        p = Packet(kind, 0, self.address, None, payload)
+        if kind == DATA:
+          self._deliver(p)
+        elif kind == RECEIPT:
+          self._handle_receipt(p)
+      fut.set_result(n)
 
   # --- resources ---
 
@@ -1234,6 +1392,9 @@ class Node:
         ratchets=self.ratchets,
         quantum_safe_only=self.quantum_safe_only,
       )
+    except msg.SenderUnknown as e:
+      self._wait_for_keyset(e.address, p)
+      return
     except Exception as e:
       log.debug('%s: bad link request: %r', self, e)
       return
@@ -1270,6 +1431,10 @@ class Node:
       if isinstance(body, dict) and body.keys() & {R.R_ADVERTISE, R.R_REQUEST, R.R_PART, R.R_DONE}:
         self._used_link(keys.link_id)
         self._handle_resource(keys, body)
+        return
+      if isinstance(body, dict) and body.keys() & PR.FIELDS:
+        self._used_link(keys.link_id)
+        self._handle_propagation(keys, body)
         return
       m, close = L.read_message(keys, self.address, plain)
     except Exception as e:

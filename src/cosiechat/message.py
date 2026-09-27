@@ -60,6 +60,7 @@ A_IDENTITY = 1
 A_SEQUENCE = 2
 A_APP_DATA = 4
 A_RATCHET = 5
+A_SERVICES = 7  # optional bitmask: 1 = propagation node
 
 # unprotected Sign1/Sign header carrying the sender's public keyset, so a
 # recipient that never saw the sender's announce can still verify
@@ -326,6 +327,7 @@ class Announce:
   ratchet: Key
   app_data: Any = None
   full: bool = True  # carried its keyset
+  services: int = 0
 
   @property
   def address(self) -> bytes:
@@ -338,6 +340,7 @@ def make_announce(
   app_data: Any = None,
   sequence: int | None = None,
   full: bool = True,
+  services: int = 0,
 ) -> bytes:
   """
   `sequence` must grow with each announce of this identity (default: Unix ms).
@@ -350,6 +353,8 @@ def make_announce(
     body[A_APP_DATA] = app_data
   check_ratchet(ratchet)
   body[A_RATCHET] = ratchet.public().to_cose()
+  if services:
+    body[A_SERVICES] = services
   return identity.sign(cbor.dumps(body))
 
 
@@ -398,4 +403,7 @@ def verify_announce(
   seq = body.get(A_SEQUENCE, 0)
   if not isinstance(seq, int) or seq < 0:
     raise CoseError('announce sequence must be an unsigned integer')
-  return Announce(ident, seq, ratchet, body.get(A_APP_DATA), pub is not None)
+  services = body.get(A_SERVICES, 0)
+  if not isinstance(services, int) or services < 0:
+    raise CoseError('bad announce services')
+  return Announce(ident, seq, ratchet, body.get(A_APP_DATA), pub is not None, services)

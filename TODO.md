@@ -125,9 +125,10 @@ Legend: [ ] todo, [~] partly done
 7. [x] **Large transfers.** Done (SPEC §9.3, `resource.py`):
    `send_resource()` / `on_resource()` over links, receiver-pulled windows of
    LoRa-frame-sized parts, SHA-256 check, size limit, lost-`done` recovery.
-8. [ ] **Propagation nodes like LXMF's:** clients hand messages to a chosen
-   propagation node and later fetch theirs, instead of relying on a node that
-   happens to be on the path. Needs a small request/response protocol.
+8. [x] **Propagation nodes.** Done (SPEC §9.4, `propagation.py`): announced
+   via services bit; deposit over a link with its own receipt; automatic
+   deposit when direct delivery gives up; authenticated fetch in acknowledged
+   batches; links and messages from unknown senders fetch the keyset first.
 
 ### B. Needed for SPEC.md to be the porting guide
 

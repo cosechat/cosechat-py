@@ -9,7 +9,7 @@ others, but these are what the reference does.
 
 import inspect
 
-from . import link, message, node, packet, ratchet, resource, store
+from . import link, message, node, packet, propagation, ratchet, resource, store
 from .identity import ADDRESS_SIZE
 
 PROTOCOL = [
@@ -29,6 +29,7 @@ PROTOCOL = [
 ]
 
 LIMITS = [
+  ('propagation batch', propagation.BATCH, 'items handed over per fetch'),
   ('resource part', resource.PART_SIZE, 'bytes of data per part (fits one LoRa frame)'),
   ('resource window', resource.WINDOW, 'parts a receiver asks for at a time'),
   ('resource stalls', node.RESOURCE_STALLS, 'times a receiver re-asks without progress'),
@@ -82,6 +83,7 @@ NODE_NOTES = {
   'path_ttl': 's a path lives after the announce that set it',
   'max_peers': 'peers remembered (least recently heard forgotten first)',
   'max_resource': 'bytes: the largest resource accepted',
+  'auto_propagate': 'deposit with a propagation node when direct delivery gives up',
   'announce_cap': 'share of a slow road announces may use',
   'announce_queue_age': 's an announce may wait in the queue',
   'rebroadcast_min_interval': 's between rebroadcasts of one identity',

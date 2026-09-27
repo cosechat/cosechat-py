@@ -113,6 +113,14 @@ def test_message_and_link_bodies():
   valid('resource-body', R.encode(R.R_REQUEST, [out.id, [0, 1, 2]]))
   valid('resource-body', R.encode(R.R_PART, [out.id, 0, out.parts[0]]))
   valid('resource-body', R.encode(R.R_DONE, out.id))
+  for body in (
+    {15: [b.address, 1, sealed], 6: b'\x00' * 16},
+    {12: True},
+    {13: [0, 1, sealed]},
+    {14: 1},
+    {16: 1},
+  ):
+    valid('propagation-body', cbor.dumps(body))
 
 
 def test_every_frame_a_live_mesh_sends():

@@ -279,7 +279,8 @@ optional forms, mainly as a demonstration of COSE:
 body     = { 1: public keyset (bstr)          ; only in a *full* announce (§7.2)
              2: sequence (uint),
              4: app data (any, optional),
-             5: ratchet (public COSE_Key) }  ; required (§7.1)
+             5: ratchet (public COSE_Key),   ; required (§7.1)
+             7: services (uint, optional) }  ; bitmask: 1 = propagation node (§9.4)
 announce = identity signature over bstr(body)       ; protected kid = address
 ```
 
@@ -619,6 +620,38 @@ id = SHA-256(data)[0:16]
   finished is answered with `done` again.
 * The sender answers a request with those parts only (at most two windows).
 
+### 9.4 Propagation nodes
+
+Like LXMF's propagation nodes: a node that holds messages for peers that are
+offline. It says so in its announce (field 7, services bit `1`).
+
+```
+deposit   link body {15: [recipient, packet type, payload], ? 6: deposit receipt secret}
+fetch     link body {12: true}
+item      link body {13: [index, packet type, payload]}
+end       link body {14: item count}
+ack       link body {16: item count}
+```
+
+* **Deposit.** A sender with a link to a propagation node hands it the
+  recipient's envelope, already sealed to the recipient's ratchet (so the
+  node holds only ciphertext). The node stores it and confirms with a RECEIPT
+  for `receipt_tag(deposit secret, its own address)`. The deposit secret is
+  not the message's, so the node cannot fake the recipient's receipt. The
+  reference deposits when asked (`send(..., propagate=True)`), and
+  automatically when direct delivery gives up (`auto_propagate`).
+* **Fetch.** A recipient links to the node (the link authenticates it; it
+  does not have to announce) and asks. The node hands over a batch of what
+  it holds for that address (reference: up to 64) and an `end` with the
+  count; it keeps the batch until an `ack` with that count, and answers a
+  repeated fetch with the same batch, so nothing is lost in transit and
+  nobody else can drain a mailbox. The recipient handles each item as if it
+  had just arrived, so receipts go back to the senders end to end.
+* A propagation node also forwards what it holds when the recipient
+  announces (§9).
+* To open what it fetches, a recipient needs the ratchets the messages were
+  sealed to: keeping ratchets across restarts is storage policy (§7.1).
+
 ## 10. Roads
 
 A road is a broadcast medium that moves opaque frames and declares an MTU.
@@ -794,6 +827,7 @@ announce-body = {
   2 => uint,                               ; sequence
   ? 4 => any,                              ; app data
   5 => ratchet-key,
+  ? 7 => uint,                             ; services bitmask: 1 = propagation node
 }
 
 message-body = {
@@ -825,6 +859,14 @@ resource-advert = {
 }
 resource-request = [resource-id, [* uint]] ; part indexes wanted
 resource-part = [resource-id, uint, bstr]  ; index, data
+
+; propagation nodes, over a link (one of these per link message)
+propagation-body = {15 => deposit, ? 6 => bstr .size 16}   ; deposit (+ its receipt secret)
+                 / {12 => true}                            ; fetch
+                 / {13 => [uint, uint, bstr]}              ; item: index, packet type, payload
+                 / {14 => uint}                            ; end of batch: item count
+                 / {16 => uint}                            ; ack: got that many
+deposit = [address, uint, bstr]            ; recipient, packet type (1 data / 4 receipt), payload
 
 link-body = {                              ; a message body without `to`
   2 => uint,
@@ -913,6 +955,7 @@ copy and the code differ).
 | path_ttl | 604,800 | s a path lives after the announce that set it |
 | max_peers | 10,000 | peers remembered (least recently heard forgotten first) |
 | max_resource | 16,777,216 | bytes: the largest resource accepted |
+| auto_propagate | `True` | deposit with a propagation node when direct delivery gives up |
 | announce_cap | 0.02 | share of a slow road announces may use |
 | announce_queue_age | 3600 | s an announce may wait in the queue |
 | rebroadcast_min_interval | 60 | s between rebroadcasts of one identity |
@@ -921,6 +964,7 @@ copy and the code differ).
 
 | | value | |
 |---|---:|---|
+| propagation batch | 64 | items handed over per fetch |
 | resource part | 320 | bytes of data per part (fits one LoRa frame) |
 | resource window | 8 | parts a receiver asks for at a time |
 | resource stalls | 8 | times a receiver re-asks without progress |

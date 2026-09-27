@@ -67,6 +67,7 @@ announce-body = {
   2 => uint,                               ; sequence
   ? 4 => any,                              ; app data
   5 => ratchet-key,
+  ? 7 => uint,                             ; services bitmask: 1 = propagation node
 }
 
 message-body = {
@@ -98,6 +99,14 @@ resource-advert = {
 }
 resource-request = [resource-id, [* uint]] ; part indexes wanted
 resource-part = [resource-id, uint, bstr]  ; index, data
+
+; propagation nodes, over a link (one of these per link message)
+propagation-body = {15 => deposit, ? 6 => bstr .size 16}   ; deposit (+ its receipt secret)
+                 / {12 => true}                            ; fetch
+                 / {13 => [uint, uint, bstr]}              ; item: index, packet type, payload
+                 / {14 => uint}                            ; end of batch: item count
+                 / {16 => uint}                            ; ack: got that many
+deposit = [address, uint, bstr]            ; recipient, packet type (1 data / 4 receipt), payload
 
 link-body = {                              ; a message body without `to`
   2 => uint,

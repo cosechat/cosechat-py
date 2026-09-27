@@ -114,6 +114,8 @@ def read_request(
   sender = resolve(sender_addr) if sender_addr else None
   if sender is None:
     sender = msg.attached_identity(signed)
+  if sender is None and sender_addr is not None:
+    raise msg.SenderUnknown(sender_addr)  # the caller may fetch the keyset and retry
   if sender is None or sender.address != sender_addr:
     raise CoseError('link request from an unknown identity')
   body = cbor.loads(sender.verify(sm))
