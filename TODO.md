@@ -66,6 +66,8 @@ and will be ported from this repo. The docs are the porting guide:
 * After any wire change: `uv run python -m cosiechat.vectors > tests/vectors/vectors.json`,
   `uv run python scripts/sync_spec.py` (refreshes the generated SPEC sections),
   run the tests, and run the wolfCOSE checker (below).
+* Before every commit: `scripts/gate.sh` (ruff check, ruff format --check,
+  pytest); commit only if it exits 0.
 * wolfCOSE checker: build wolfSSL (CMake: `-DWOLFSSL_MLDSA=yes -DWOLFSSL_MLKEM=yes
   -DWOLFSSL_HPKE=yes -DWOLFSSL_ED25519=yes -DWOLFSSL_CURVE25519=yes
   -DWOLFSSL_SHA3=yes -DWOLFSSL_SHAKE256=yes -DWOLFSSL_HKDF=yes`, plus AES-GCM,
@@ -170,8 +172,11 @@ Legend: [ ] todo, [~] partly done
 20. [x] **Contact cards and address text.** Done (SPEC §7, `contact.py`):
     `cosiechat:` URIs of a signed full announce, `Node.contact_card()` /
     `add_contact()`, base32 address text with a checksum; chat `/card`, `/add`.
-21. [ ] Several destinations per identity (Reticulum "aspects"), or several
-    identities per node.
+21. [x] **Several identities per device.** Done: `roads/shared.py`
+    (`SharedRoad`) lets several nodes share one physical road, no protocol
+    change. Reticulum-style aspects were rejected on purpose: they would
+    change address derivation, and services bits, message `fields` and
+    separate identities already cover the uses.
 22. [ ] Packaging: versioning, changelog, CI (tests + ruff + wolfCOSE
     checker), PyPI.
 

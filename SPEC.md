@@ -673,6 +673,12 @@ A road is a broadcast medium that moves opaque frames and declares an MTU.
 | WebSocket | one frame per binary message; server road = all clients share one medium | 1 MiB |
 | RNode | RNode KISS host protocol over serial (115200 8N1) | 508 |
 
+One device can host several identities (say, a chat app and a bot) over one
+physical road: each node gets a virtual branch of the road, and what one
+sends also reaches its siblings locally (reference: `roads/shared.py`).
+There are no Reticulum-style aspects: an address is one keyset, so an app
+that wants its own address uses its own identity.
+
 ### 10.1 RNode
 
 KISS framing: `FEND cmd data FEND`, with `FEND→FESC TFEND` and

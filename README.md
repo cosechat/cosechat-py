@@ -50,7 +50,7 @@ src/cosiechat/
   link.py       sessions: PQ handshake, then symmetric messages
   packet.py     packets, fragmentation, road auth (Mac0 / Encrypt0 per frame)
   node.py       routing: announces, paths, via-forwarding, path requests, store & forward
-  roads/        memory, udp, websocket, rnode (+ kiss)
+  roads/        memory, udp, websocket, rnode (+ kiss), shared (several nodes, one road)
   vectors.py    interop test vectors: generate + check
   cli.py        cosiechat dev tool: keygen, info, vectors, check
 interop/wolfcose/   C checker: runs the vectors through stock wolfCOSE

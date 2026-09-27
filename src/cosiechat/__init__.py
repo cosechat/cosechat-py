@@ -9,6 +9,7 @@ from .packet import RoadAuth
 from .store import MemoryStore, Store
 
 __all__ = [
+  'contact',
   'MemoryStore',
   'Store',
   'SUITES',
