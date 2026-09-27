@@ -88,7 +88,7 @@ Legend: [ ] todo, [~] in progress, [x] done
 
 ### A. Required for real use (especially LoRa)
 
-1. [ ] **Wire version.** Packets have no version. Add one (e.g. packet
+1. [x] **Wire version.** Done: every frame is `[version, ...]`, VERSION = 0. Packets have no version. Add one (e.g. packet
    `[version, type, ...]` or a leading version byte) before other
    implementations ship. The PQ HPKE ids (56/57, 62–65) are still draft values.
 2. [ ] **Delivery receipts and retransmission.** A lost fragment silently loses

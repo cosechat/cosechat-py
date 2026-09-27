@@ -308,7 +308,14 @@ def test_packet_roundtrip_and_hash_ignores_hops_and_via():
 
 @pytest.mark.parametrize(
   'bad',
-  [b'', b'\xff', cbor.dumps([9, 0, b'x', None, b'']), cbor.dumps([1, 0, b'short', None, b''])],
+  [
+    b'',
+    b'\xff',
+    cbor.dumps([0, 9, 0, b'x' * 16, None, b'']),  # unknown type
+    cbor.dumps([0, 1, 0, b'short', None, b'']),  # bad address
+    cbor.dumps([1, 1, 0, b'x' * 16, None, b'']),  # future protocol version
+    cbor.dumps([1, 0, b'x' * 16, None, b'']),  # no version
+  ],
 )
 def test_packet_decode_rejects_junk(bad):
   with pytest.raises(P.PacketError):

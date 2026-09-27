@@ -1,7 +1,9 @@
 """
 Packets: what travels on a road.
 
-  packet   = [type, hops, dest, via, payload]
+  packet   = [version, type, hops, dest, via, payload]
+    version  protocol version, VERSION (0 while the spec is a draft); receivers
+             drop frames with a version they do not implement
     type     0 ANNOUNCE, 1 DATA, 2 PATH_REQUEST
     hops     hops already travelled (originator sends 0)
     dest     16-byte destination address
@@ -9,7 +11,7 @@ Packets: what travels on a road.
     payload  bstr: announce (COSE_Sign1/Sign), sealed message (COSE_Encrypt0/Encrypt),
              or a random tag for path requests
 
-  fragment = [3, id, index, count, chunk]
+  fragment = [version, 3, id, index, count, chunk]
     Roads with a small MTU (LoRa) carry big packets (PQ keys and signatures
     are kilobytes) as fragments. Fragments of one packet share an 8-byte id.
 
@@ -17,7 +19,7 @@ Packets: what travels on a road.
                COSE_Encrypt0 under a road key (see RoadAuth).
 
 The packet hash (for duplicate suppression) covers only the immutable parts:
-SHA-256(CBOR [type, dest, payload]).
+SHA-256(CBOR [version, type, dest, payload]).
 """
 
 import hashlib
@@ -29,6 +31,8 @@ from . import cbor, cose
 from .identity import ADDRESS_SIZE
 from .keys import A256GCM, HMAC_256_256, CoseError, Key, get_alg
 
+VERSION = 0
+
 ANNOUNCE = 0
 DATA = 1
 PATH_REQUEST = 2
@@ -37,8 +41,8 @@ FRAGMENT = 3
 TYPES = {ANNOUNCE: 'ANNOUNCE', DATA: 'DATA', PATH_REQUEST: 'PATH_REQUEST'}
 
 FRAGMENT_ID_SIZE = 8
-# array(1) + type(1) + id(1+8) + index(3) + count(3) + chunk header(3)
-FRAGMENT_OVERHEAD = 20
+# array(1) + version(1) + type(1) + id(1+8) + index(3) + count(3) + chunk header(3)
+FRAGMENT_OVERHEAD = 21
 
 
 class PacketError(Exception):
@@ -54,11 +58,11 @@ class Packet:
   payload: bytes
 
   def encode(self) -> bytes:
-    return cbor.dumps([self.type, self.hops, self.dest, self.via, self.payload])
+    return cbor.dumps([VERSION, self.type, self.hops, self.dest, self.via, self.payload])
 
   @property
   def hash(self) -> bytes:
-    return hashlib.sha256(cbor.dumps([self.type, self.dest, self.payload])).digest()
+    return hashlib.sha256(cbor.dumps([VERSION, self.type, self.dest, self.payload])).digest()
 
   def __repr__(self):
     via = self.via.hex()[:8] if self.via else '-'
@@ -78,8 +82,11 @@ def decode(frame: bytes):
     arr = cbor.loads(frame)
   except Exception as e:
     raise PacketError(f'bad CBOR: {e}') from None
-  if not isinstance(arr, list) or not arr or not isinstance(arr[0], int):
+  if not isinstance(arr, list) or len(arr) < 2 or not all(isinstance(x, int) for x in arr[:2]):
     raise PacketError('not a packet')
+  if arr[0] != VERSION:
+    raise PacketError(f'unsupported protocol version {arr[0]}')
+  arr = arr[1:]
   if arr[0] == FRAGMENT:
     if len(arr) != 5:
       raise PacketError('bad fragment')
@@ -102,7 +109,7 @@ def fragment(frame: bytes, chunk_size: int) -> list[bytes]:
     raise PacketError('road MTU too small to fragment into')
   fid = os.urandom(FRAGMENT_ID_SIZE)
   chunks = [frame[i : i + chunk_size] for i in range(0, len(frame), chunk_size)]
-  return [cbor.dumps([FRAGMENT, fid, i, len(chunks), c]) for i, c in enumerate(chunks)]
+  return [cbor.dumps([VERSION, FRAGMENT, fid, i, len(chunks), c]) for i, c in enumerate(chunks)]
 
 
 class Reassembler:

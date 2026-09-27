@@ -331,15 +331,21 @@ passphrase-encrypted at rest.
 ## 8. Packets
 
 ```
-packet = [ type, hops, dest, via, payload ]
+packet = [ version, type, hops, dest, via, payload ]
+  version uint, 0 for this draft
   type    0 ANNOUNCE | 1 DATA | 2 PATH_REQUEST
   hops    uint, hops travelled so far (originator sends 0)
   dest    bstr .size 16
   via     bstr .size 16 / null   the transport node that should forward it
   payload bstr   announce | sealed message | 8-byte random tag (path request)
 
-packet hash = SHA-256(CBOR [type, dest, payload])   ; hops and via excluded
+packet hash = SHA-256(CBOR [version, type, dest, payload])   ; hops and via excluded
 ```
+
+Receivers MUST drop any frame whose version they do not implement. Every
+frame, including fragments, starts with the version, so an incompatible
+change (for example new COSE algorithm ids once the PQ HPKE drafts are
+registered) bumps it and old and new nodes ignore each other cleanly.
 
 ### 8.1 Fragments
 
@@ -347,13 +353,13 @@ A road has an MTU. When an encoded packet (plus road-auth overhead) is larger,
 it is sent as fragments:
 
 ```
-fragment = [ 3, id (bstr .size 8, random), index, count, chunk (bstr) ]
+fragment = [ version, 3, id (bstr .size 8, random), index, count, chunk (bstr) ]
 ```
 
 Receivers reassemble per road and fragment id, in any order, and drop
 incomplete sets after a timeout (reference: 60 s). There is no
 retransmission; a lost fragment loses the packet. Senders size chunks as
-`mtu - road auth overhead - 20`.
+`mtu - road auth overhead - 21`.
 
 ### 8.2 Road auth
 
