@@ -32,11 +32,11 @@ network.
 
 | need | Python (this repo) | JavaScript | Arduino / MCU |
 |---|---|---|---|
-| CBOR | cbor2 (`canonical=True`) | cborg (deterministic encoding) or cbor-x | wolfCOSE's CBOR (`wc_CBOR_*`) |
+| CBOR | cbor2 (`canonical=True`) | cborg, with a length-first map sorter (see JS notes) | wolfCOSE's CBOR (`wc_CBOR_*`) |
 | COSE | own thin layer (`cose.py`) | port `cose.py` (no JS COSE lib does ML-DSA/X-Wing) | wolfCOSE |
 | ML-DSA | cryptography ≥ 50 | @noble/post-quantum (`ml_dsa65`) | wolfCOSE / wolfCrypt ML-DSA |
 | ML-KEM, X-Wing | cryptography ≥ 50 (HPKE `MLKEM768_X25519`) | @noble/post-quantum (`ml_kem768_x25519`) | wolfCrypt ML-KEM + X25519 (glue, below) |
-| HPKE | cryptography ≥ 50 | hpke-js (@hpke/core, @hpke/hybridkem-x-wing) | wolfCrypt HPKE (HPKE-0 via wolfCOSE) |
+| HPKE | cryptography ≥ 50 | composed from noble (RFC 9180 for DHKEM, the one-stage SHAKE256 schedule for PQ; hpke-js has no SHAKE256 KDF) | wolfCrypt HPKE (HPKE-0 via wolfCOSE) |
 | Ed25519, X25519, P-256 | cryptography | @noble/curves | wolfCrypt |
 | AES-GCM, ChaCha20-Poly1305, HMAC, SHA-2, SHAKE, HKDF | cryptography, hashlib | WebCrypto, @noble/ciphers, @noble/hashes | wolfCrypt |
 
@@ -125,9 +125,20 @@ protocol in SPEC §10.1.
 
 ## JavaScript notes
 
-* **Browser**: WebSocket road only, to a transport node running
-  `WebSocketServerRoad` (e.g. `examples/chat.py --ws-server 4243 --transport`).
+The JavaScript port lives in `../cosechat-js` (plain ES modules, no WASM). It
+passes every vector here, its own generated vectors pass `cosechat check` and
+the wolfCOSE checker, and its echo bot passes `interop/live.py` 6/6.
+
+* **Browser**: a WebSocket road to a transport node running
+  `WebSocketServerRoad` (e.g. `examples/chat.py --ws-server 4243 --transport`),
+  and an RNode over Web Serial (Chrome, Edge).
 * **Node.js**: UDP (`dgram`), WebSocket (`ws`), RNode over serial
   (`serialport`).
 * The node is naturally asynchronous; the Python `Node` maps onto
   promises and timers one to one.
+* **CBOR map order**: cbor2's canonical mode sorts keys by encoded length,
+  then bytewise (RFC 7049 §3.9). cborg's default sorter orders differently, so
+  it needs a custom `mapSorter`, and cborg's encoder is not reentrant, so the
+  sorter must not call `encode`.
+* In Node, cborg can return a pooled `Buffer`, whose `slice()` is a view:
+  copy to a plain `Uint8Array` before relying on `slice()` copying.
