@@ -1,5 +1,7 @@
 """
-Flatten tests/vectors/vectors.json into one-line cases for the wolfCOSE checker:
+Flatten tests/vectors/vectors.json (or the vector file given as the first
+argument, e.g. one from another implementation) into one-line cases for the
+wolfCOSE checker:
 
   name op key_hex[,key_hex...] aad_hex|- data_hex expect_hex
 
@@ -52,7 +54,8 @@ def keyhex(k: K.Key) -> str:
 
 
 def main():
-  v = json.loads((ROOT / 'tests' / 'vectors' / 'vectors.json').read_text())
+  src = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / 'tests' / 'vectors' / 'vectors.json'
+  v = json.loads(src.read_text())
   cases, skipped = [], []
 
   def add(name, op, keys, data, expect, aad=b''):
