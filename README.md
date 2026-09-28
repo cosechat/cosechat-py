@@ -50,7 +50,7 @@ src/cosechat/
   link.py       sessions: PQ handshake, then symmetric messages
   packet.py     packets, fragmentation, road auth (Mac0 / Encrypt0 per frame)
   node.py       routing: announces, paths, via-forwarding, path requests, store & forward
-  roads/        memory, udp, websocket, rnode (+ kiss), shared (several nodes, one road)
+  roads/        memory, udp, websocket, rnode (+ kiss), shared, wifi_raw, ble
   vectors.py    interop test vectors: generate + check
   cli.py        cosechat dev tool: keygen, info, vectors, check
 interop/wolfcose/   C checker: runs the vectors through stock wolfCOSE
@@ -61,11 +61,19 @@ The data library (`keys`, `cose`, `identity`, `message`, `ratchet`, `link`, `pac
 does no I/O. Roads know nothing about crypto. `Node` joins the two. Nothing
 in the library stores keys or expires them by time.
 
+Two roads sit on a *radio* rather than a socket, with no association and no
+connection, like LoRa: `wifi_raw` (raw 802.11 action frames over AF_PACKET)
+and `ble` (anonymous BLE extended advertising through BlueZ). Both are
+Linux-only on a host, both are MTU-matched to the C reference so an ESP32 can
+share the medium, and both expose their codec so another transport can carry
+the same frames. For tests and simulation every road has an in-process
+counterpart in `roads/memory.py`.
+
 ## Use
 
 ```sh
 uv sync --all-extras
-uv run pytest                      # no hardware needed
+uv run pytest                      # the real-RNode test skips unless two are attached
 uv run cosechat keygen -o me.key  # dev tool: new identity (plain keyset)
 uv run cosechat info me.key
 uv run cosechat sizes             # measured wire sizes
@@ -73,7 +81,10 @@ uv run cosechat constants         # every constant and default
 uv run examples/chat.py --name alice --udp 4242
 uv run examples/chat.py --lock --udp 4242           # passphrase-encrypt keys at rest
 uv run examples/chat.py --ws-server 4243 --transport  # a hub for browsers
+uv run examples/chat.py --ws                          # join the web example's room
 uv run examples/chat.py --rnode /dev/ttyUSB0 --freq 868000000 --sf 8
+uv run examples/lora_gateway.py /dev/ttyUSB0 --freq 868000000       # LoRa <-> the web room
+uv run examples/echo_bot.py --rnode /dev/ttyACM0 --freq 868000000   # a bot on LoRa
 ```
 
 In the chat, `@<address prefix> text` sends, a bare line replies, and

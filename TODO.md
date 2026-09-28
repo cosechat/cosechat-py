@@ -172,7 +172,10 @@ Legend: [ ] todo, [~] partly done
 18. [x] **Private `cryptography` helper guarded.** `cryptography>=50,<51`
     and `tests/test_keys_private_api.py` (helper present, aad really bound).
     When 51 comes out: run that test, then raise the bound.
-19. [ ] Test the RNode road on real hardware (so far only the emulator).
+19. [x] **Real RNode hardware.** Tested on two RNodes (firmware 1.86) over
+    the air in `tests/test_rnode_hardware.py` (skipped unless two serial RNodes
+    are attached). Opening the port resets the device (ESP32 DTR/RTS), so the
+    road now retries the detect and config handshake until it answers.
 20. [x] **Contact cards and address text.** Done (SPEC §7, `contact.py`):
     `cosechat:` URIs of a signed full announce, `Node.contact_card()` /
     `add_contact()`, base32 address text with a checksum; chat `/card`, `/add`.
@@ -189,9 +192,24 @@ Legend: [ ] todo, [~] partly done
 ### D. Later / optional
 
 * Group and plain destinations (Reticulum GROUP/PLAIN) for broadcast channels.
-* More roads: TCP (Reticulum's common internet link), generic KISS TNCs, BLE.
+* More roads: TCP (Reticulum's common internet link), generic KISS TNCs.
 * Stamps/proof-of-work against spam (LXMF has them).
 * The Arduino port (`../cosechat-arduino`, wolfCOSE + wolfSSL).
+
+### Done
+
+* **Anonymous broadcast roads** — `wifi_raw.py`, `ble.py`: `RawWifiRoad`
+  (raw 802.11 action frames, Linux AF_PACKET) and `BLERoad` (anonymous BLE
+  extended advertising). BLE TX/RX go through BlueZ over D-Bus; the road
+  checks `SupportedCapabilities.MaxAdvLen` for extended-advertising support,
+  and the path is pinned by a fake-D-Bus test (`tests/test_ble_bluez.py`).
+  Both are Linux-only on a host and MTU-matched to the C reference. JS port
+  below.
+* **LoRa <-> WebSocket bridge examples** — `examples/room.py` (the shared
+  room the web example uses), `lora_gateway.py` (RNode + room/UDP transport
+  node, `--announce-cap`), `echo_bot.py --rnode`, `chat.py --ws`; proven
+  end to end in `tests/test_bridge.py` with an emulated RNode and a real
+  socket.
 
 ### E. Housekeeping
 

@@ -2,6 +2,16 @@
 Roads move opaque frames. They know nothing about identities or crypto; a
 Node attaches to any number of them. A road is a broadcast medium: send()
 reaches every peer on it, and received frames are handed to `on_frame`.
+
+Road implementations:
+  ``wifi_raw``      raw 802.11 management-frame road (no association needed)
+  ``ble``           anonymous BLE extended-advertising road
+  ``udp``           UDP datagrams (local broadcast or unicast peers)
+  ``websocket``     WebSocket binary messages (server + client)
+  ``rnode``         RNode LoRa radio over serial port (KISS protocol)
+  ``kiss``          KISS frame decoder
+  ``memory``        in-process roads for tests and simulations
+  ``shared``        one physical road, several nodes (branches)
 """
 
 import logging

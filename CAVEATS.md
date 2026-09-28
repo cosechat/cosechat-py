@@ -121,6 +121,27 @@ slow LoRa settings will still be slow to learn new paths. Links (SPEC §9.2)
 make the per-message cost small once a path is known. Duty-cycle limits (e.g.
 1% in parts of the EU 868 MHz band) also cap how often you can send.
 
+**A sealed message is a burst too.** A sealed one-to-one message is ~4.5 kB,
+i.e. ~10 fragments on LoRa (~13 s of air), and a link handshake is bigger
+still. One lost fragment costs the whole packet, and the receiver's fragment
+NACKs (a few attempts, a couple of frame-times apart) land while the sender is
+still transmitting, so they are not heard. A chat should therefore **open a
+link**: after the handshake each message is a ~45-byte record, one frame. The
+web example (`cosechat-js/examples/web`) and `examples/chat.py` both open one
+before talking. Measured on two RNodes at SF8, a client sending only sealed
+messages lost one in three exchanges; over a link each message is one frame
+instead of ten.
+
+**A long announce needs a quiet channel.** A radio cannot receive while it
+transmits, and a full `pq` announce takes ~18 s of air at SF8. Two nodes that
+announce at the same moment are therefore deaf to each other's fragments *and*
+to each other's fragment NACKs, so nothing reassembles and no amount of
+retrying helps while the broadcasts overlap: each retry starts a new
+collision. Stagger announces (the hardware test in
+`tests/test_rnode_hardware.py` announces one side, waits out the burst, then
+the other), or use a faster SF. The same applies to a transport node relaying
+a peer's announce while the peer is still sending.
+
 ## Implementation notes
 
 * **wolfCOSE (Arduino) coverage.** Stock wolfCOSE verifies everything except
@@ -141,8 +162,20 @@ make the per-message cost small once a path is known. Duty-cycle limits (e.g.
 * **python-cwt bug.** python-cwt 3.3 reuses one encapsulated key (`ek`) across
   HPKE recipients, so its multi-recipient messages cannot be opened by all
   recipients. `tests/test_interop.py` works around it.
-* **RNode support is tested against an emulator only.** The RNode road
-  follows Reticulum's RNodeInterface, but it has not been run against real
-  hardware yet.
+* **RNode support.** The RNode road follows Reticulum's RNodeInterface and is
+  tested against an emulated RNode plus two real RNodes over the air
+  (`tests/test_rnode_hardware.py`, skipped unless two serial RNodes are
+  attached). Opening the port resets the device, so the handshake retries the
+  detect and config steps until the firmware answers.
+* **Anonymous roads (raw 802.11, BLE) are Linux-only on a host.** They exist
+  so a computer can sit on the same medium as an ESP32 running the C
+  reference; the MTUs match it (252 and 247 bytes), so the framing
+  interoperates. `wifi_raw` is AF_PACKET on an interface in monitor mode.
+  `ble` advertises and scans through BlueZ: it needs an adapter that supports
+  extended advertising (BlueZ reports the ceiling in
+  `LEAdvertisingManager1.SupportedCapabilities.MaxAdvLen`; 251 bytes are
+  required), and the road is tested against a fake D-Bus, not a radio. One
+  honest gap: BlueZ always writes the adapter address into the advertisement,
+  so a host node is not address-less the way the ESP32 road is.
 * **UDP broadcast** needs peers on the same subnet and a network that passes
   broadcasts. Use `--peer` / `peers=[...]` for unicast otherwise.

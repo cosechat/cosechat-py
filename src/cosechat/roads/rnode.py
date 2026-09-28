@@ -121,9 +121,9 @@ class RNodeRoad(Road):
     self._decoder = kiss.Decoder(max_size=HW_MTU * 2 + 8)
     self._loop = None
     self._reader = None
-    self._changed = asyncio.Event()
     self._ready = True
     self._queue: list[bytes] = []
+    self._closed = threading.Event()
 
   # --- lifecycle ---
 
@@ -142,29 +142,43 @@ class RNodeRoad(Road):
     if self.boot_delay:
       await asyncio.sleep(self.boot_delay)
 
-    await self._write(
-      bytes(
-        [
-          kiss.FEND,
-          CMD_DETECT,
-          DETECT_REQ,
-          kiss.FEND,
-          CMD_FW_VERSION,
-          0x00,
-          kiss.FEND,
-          CMD_PLATFORM,
-          0x00,
-          kiss.FEND,
-          CMD_MCU,
-          0x00,
-          kiss.FEND,
-        ]
-      )
+    # opening the port may reset the device (ESP32 DTR/RTS), and the firmware
+    # only answers once it is up, so keep asking until it replies
+    probe = bytes(
+      [
+        kiss.FEND,
+        CMD_DETECT,
+        DETECT_REQ,
+        kiss.FEND,
+        CMD_FW_VERSION,
+        0x00,
+        kiss.FEND,
+        CMD_PLATFORM,
+        0x00,
+        kiss.FEND,
+        CMD_MCU,
+        0x00,
+        kiss.FEND,
+      ]
     )
-    await self._wait(lambda: self.detected and self.firmware, 'device did not answer detect')
+    await self._probe(
+      probe, lambda: self.detected and self.firmware, 'device did not answer detect'
+    )
     if self.firmware < REQUIRED_FIRMWARE:
       raise RNodeError(f'firmware {self.firmware} too old, need {REQUIRED_FIRMWARE}')
 
+    # the device may still be booting: resend the config until it echoes it back
+    end = time.monotonic() + self.timeout
+    while not (self.radio_state == RADIO_STATE_ON and self.reported == self.config):
+      if self.errors:
+        raise RNodeError(self.errors[-1])
+      if time.monotonic() > end:
+        raise RNodeError(f'{self}: radio did not confirm configuration')
+      await self._configure()
+      await asyncio.sleep(0.5)
+    await super().start()
+
+  async def _configure(self):
     c = self.config
     await self._command(CMD_FREQUENCY, _u32(c['frequency']))
     await self._command(CMD_BANDWIDTH, _u32(c['bandwidth']))
@@ -176,14 +190,11 @@ class RNodeRoad(Road):
     if self.lt_alock is not None:
       await self._command(CMD_LT_ALOCK, int(self.lt_alock * 100).to_bytes(2, 'big'))
     await self._command(CMD_RADIO_STATE, bytes([RADIO_STATE_ON]))
-    await self._wait(
-      lambda: self.radio_state == RADIO_STATE_ON and self.reported == self.config,
-      'radio did not confirm configuration',
-    )
-    await super().start()
 
   async def stop(self):
     await super().stop()
+    # let the reader exit quietly: closing the port wakes it with a bad-fd error
+    self._closed.set()
     if self.serial:
       try:
         await self._write(kiss.frame(CMD_LEAVE, b'\xff'))
@@ -209,28 +220,32 @@ class RNodeRoad(Road):
     await self._write(kiss.frame(cmd, data))
 
   async def _write(self, data: bytes):
+    if self.serial is None:
+      raise RNodeError(f'{self}: not open')
     await self._loop.run_in_executor(None, self.serial.write, data)
 
-  async def _wait(self, cond, err: str):
+  async def _probe(self, data: bytes, cond, err: str):
+    """Send `data` until `cond()` holds, or `timeout` runs out (for a booting device)."""
     end = time.monotonic() + self.timeout
     while not cond():
       if self.errors:
         raise RNodeError(self.errors[-1])
-      left = end - time.monotonic()
-      if left <= 0:
+      if time.monotonic() > end:
         raise RNodeError(f'{self}: {err}')
-      self._changed.clear()
-      try:
-        await asyncio.wait_for(self._changed.wait(), left)
-      except TimeoutError:
-        pass
+      await self._write(data)
+      await asyncio.sleep(0.5)
 
   def _read_loop(self):
-    while self.serial is not None:
+    while not self._closed.is_set():
+      ser = self.serial
+      if ser is None:
+        break
       try:
-        waiting = getattr(self.serial, 'in_waiting', 1)
-        data = self.serial.read(max(1, waiting))
+        waiting = getattr(ser, 'in_waiting', 1)
+        data = ser.read(max(1, waiting))
       except Exception as e:
+        if self._closed.is_set():
+          break
         log.error('%s: serial read failed: %s', self, e)
         break
       if data:
@@ -239,7 +254,6 @@ class RNodeRoad(Road):
   def _on_bytes(self, data: bytes):
     for cmd, body in self._decoder.feed(data):
       self._on_command(cmd, body)
-    self._changed.set()
 
   def _on_command(self, cmd: int, d: bytes):
     if cmd == CMD_DATA:

@@ -16,7 +16,7 @@ The public API is what this module exports, plus the modules named below:
   cosechat.cose       COSE Sign1, Sign, Mac0, Mac, Encrypt0, Encrypt
   cosechat.link       link handshake and link messages without a node
   cosechat.contact    address text and contact cards
-  cosechat.roads.*    memory, udp, websocket, rnode, shared
+  cosechat.roads.*    memory, udp, websocket, rnode, shared, wifi_raw, ble
 
 Everything else (names starting with `_`, and module internals not listed)
 may change without notice.

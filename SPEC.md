@@ -675,6 +675,8 @@ A road is a broadcast medium that moves opaque frames and declares an MTU.
 | UDP | one frame per datagram; broadcast by default (port 4242) or unicast peers | 1200 |
 | WebSocket | one frame per binary message; server road = all clients share one medium | 1 MiB |
 | RNode | RNode KISS host protocol over serial (115200 8N1) | 508 |
+| raw 802.11 | vendor-specific action frame (category 127, OUI CC-0C-05), no association needed | 252 |
+| BLE | anonymous extended-advertising manufacturer data (company id 0xFFFF) | 247 |
 
 One device can host several identities (say, a chat app and a bot) over one
 physical road: each node gets a virtual branch of the road, and what one

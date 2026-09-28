@@ -3,6 +3,7 @@ Interactive chat node on any roads, with keys kept by examples/storage.py.
 
   uv run examples/chat.py --name alice --udp 4242
   uv run examples/chat.py --ws-server 4243 --transport          # a hub for browsers
+  uv run examples/chat.py --ws                                  # join the web example's room
   uv run examples/chat.py --rnode /dev/ttyUSB0 --freq 868000000 --sf 8
   uv run examples/chat.py --lock --udp 4242                     # passphrase-encrypt keys at rest
 
@@ -24,6 +25,7 @@ import os
 import sys
 from pathlib import Path
 
+import room
 import storage
 
 from cosechat import SUITES, Node, RoadAuth, contact
@@ -149,6 +151,16 @@ async def run(a):
           print('! use @<address> <text>')
           continue
         try:
+          # a link makes each message one small frame. On a slow radio a sealed
+          # message is ~10 fragments, and losing any one of them costs the whole
+          # message (the peer cannot hear our NACKs while it is transmitting), so
+          # open a session before talking.
+          if node.link_to(to) is None:
+            try:
+              await node.open_link(to, timeout=30)
+              print('* link open (messages are now one frame)')
+            except TimeoutError:
+              print('! no link yet; sending sealed')
           await node.send(to, text)
         except (LookupError, PermissionError) as e:
           print(f'! {e}')
@@ -173,7 +185,14 @@ def main():
   p.add_argument('--udp', action='append', metavar='[HOST:]PORT', help='UDP road (broadcast)')
   p.add_argument('--udp-peer', action='append', metavar='HOST:PORT', help='unicast UDP peer')
   p.add_argument('--ws-server', action='append', metavar='[HOST:]PORT')
-  p.add_argument('--ws', action='append', metavar='URL', help='WebSocket client road')
+  p.add_argument(
+    '--ws',
+    nargs='?',
+    const=room.ROOM,
+    action='append',
+    metavar='URL',
+    help=f'WebSocket room to join (bare --ws uses {room.ROOM})',
+  )
   p.add_argument('--rnode', action='append', metavar='SERIALPORT', help='RNode LoRa road')
   p.add_argument('--freq', type=int, help='LoRa frequency in Hz')
   p.add_argument('--bw', type=int, default=125000)
