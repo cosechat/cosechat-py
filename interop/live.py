@@ -102,6 +102,9 @@ async def stranger(road_factory, bot: bytes, timeout: float):
   box: asyncio.Queue = asyncio.Queue()
   node.on_message(lambda m: box.put_nowait(m))
   async with node:
+    connected = getattr(node.lanes[0].road, 'connected', None)
+    if connected is not None:  # a WebSocket client road: wait until it is up
+      await asyncio.wait_for(connected.wait(), timeout)
     await node.request_path(bot, timeout, fresh=True)
     m = await node.send(bot, 'who am i')
     assert await node.delivered(m, timeout), 'no receipt'
