@@ -4,9 +4,9 @@ WebSocket roads (binary messages, one frame each). Needs `websockets`.
   WebSocketServerRoad  accepts many peers; send() goes to all of them
   WebSocketClientRoad  connects to a server and reconnects when dropped
 
-A server road is one shared medium: the node behind it (with transport=True)
-relays between its clients, so browsers can reach each other and the rest of
-the mesh through it.
+A server road is one shared medium, like a LAN: a frame from one client
+reaches the node behind the server and every other client. With
+transport=True that node also links the clients to the rest of the mesh.
 """
 
 import asyncio
@@ -58,13 +58,19 @@ class WebSocketServerRoad(Road):
       async for data in ws:
         if isinstance(data, bytes):
           self._deliver(data)
+          await self._send(data, exclude=ws)  # the other clients hear it too
     except ConnectionClosed:
       pass
     finally:
       self.clients.discard(ws)
 
   async def send(self, frame: bytes):
+    await self._send(frame)
+
+  async def _send(self, frame: bytes, exclude=None):
     for ws in list(self.clients):
+      if ws is exclude:
+        continue
       try:
         await ws.send(frame)
       except ConnectionClosed:

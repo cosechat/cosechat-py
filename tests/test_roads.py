@@ -64,8 +64,68 @@ def test_websocket_clients_meet_through_server_node():
         await cb.connected.wait()
         await until(lambda: len(server_road.clients) == 2)
         m = await exchange(a, b, 'via websocket hub')
-        assert a.paths[b.address].via == hubnode.address
     assert m.content == 'via websocket hub'
+
+  run(main())
+
+
+def test_websocket_server_road_is_one_medium():
+  """A frame from one client reaches the other clients, not only the server's node."""
+
+  async def main():
+    server_road = WebSocketServerRoad('127.0.0.1', 0)
+    heard = {'server': [], 'b': []}
+    server_road.on_frame = heard['server'].append
+    await server_road.start()
+    url = f'ws://127.0.0.1:{server_road.port}'
+    ca, cb = WebSocketClientRoad(url), WebSocketClientRoad(url)
+    ca.on_frame = lambda f: None
+    cb.on_frame = heard['b'].append
+    await ca.start()
+    await cb.start()
+    try:
+      await ca.connected.wait()
+      await cb.connected.wait()
+      await until(lambda: len(server_road.clients) == 2)
+      await ca.send(b'frame from a')
+      await until(lambda: heard['b'] and heard['server'])
+      assert heard['b'] == [b'frame from a'] == heard['server']
+    finally:
+      await ca.stop()
+      await cb.stop()
+      await server_road.stop()
+
+  run(main())
+
+
+def test_websocket_reply_without_a_path():
+  """
+  b never heard a's announce (a announced before b joined), yet its receipt
+  and reply get back: on a shared medium an unrouted frame reaches everyone.
+  """
+
+  async def main():
+    server_road = WebSocketServerRoad('127.0.0.1', 0)
+    hubnode = Node(transport=True, rebroadcast_delay=0)
+    hubnode.add_road(server_road)
+    async with hubnode:
+      url = f'ws://127.0.0.1:{server_road.port}'
+      ca, cb = WebSocketClientRoad(url), WebSocketClientRoad(url)
+      a = Node(rebroadcast_delay=0)
+      b = Node(rebroadcast_delay=0)
+      a.add_road(ca)
+      b.add_road(cb)
+      async with a:
+        await ca.connected.wait()
+        await a.announce()
+        await until(lambda: a.address in hubnode.paths)
+        async with b:
+          await cb.connected.wait()
+          await b.announce()
+          await until(lambda: b.address in a.paths)
+          assert b.path(a.address) is None
+          m = await a.send(b.address, 'no path back')
+          assert await a.delivered(m, 5)
 
   run(main())
 
