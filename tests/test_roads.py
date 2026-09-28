@@ -6,12 +6,12 @@ import threading
 
 from test_node import inbox, run, until
 
-from cosiechat.identity import Identity
-from cosiechat.node import Node
-from cosiechat.roads import kiss
-from cosiechat.roads import rnode as R
-from cosiechat.roads.udp import UDPRoad
-from cosiechat.roads.websocket import WebSocketClientRoad, WebSocketServerRoad
+from cosechat.identity import Identity
+from cosechat.node import Node
+from cosechat.roads import kiss
+from cosechat.roads import rnode as R
+from cosechat.roads.udp import UDPRoad
+from cosechat.roads.websocket import WebSocketClientRoad, WebSocketServerRoad
 
 
 async def exchange(a, b, content='hi'):

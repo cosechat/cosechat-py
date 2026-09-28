@@ -1,7 +1,7 @@
-# Porting cosiechat (JS, Arduino, anything)
+# Porting cosechat (JS, Arduino, anything)
 
 How to build another implementation that interoperates with this reference.
-The wire format is [SPEC.md](SPEC.md) (with [cosiechat.cddl](cosiechat.cddl));
+The wire format is [SPEC.md](SPEC.md) (with [cosechat.cddl](cosechat.cddl));
 behaviour is SPEC §17; numbers are SPEC §16. This file is the practical path.
 
 ## Order of work
@@ -11,7 +11,7 @@ Build bottom-up, and check each layer against the test vectors
 network.
 
 1. **CBOR** with deterministic encoding (RFC 8949 §4.2.1).
-2. **COSE structures** (`src/cosiechat/cose.py` is ~400 lines): Sign1, Sign,
+2. **COSE structures** (`src/cosechat/cose.py` is ~400 lines): Sign1, Sign,
    Mac0, Encrypt0, and Encrypt/Mac if you want the multi-recipient extra.
    Check with the `cose` vectors and the `exact` Sign1/Mac0/Encrypt0 cases.
 3. **Keys and algorithms**: COSE_Key (OKP, EC2, AKP, Symmetric), ML-DSA,
@@ -24,7 +24,7 @@ network.
 6. **Links** (key derivation is in `exact`; handshakes in `links`), then
    resources and propagation.
 7. **Node behaviour** (SPEC §17), then roads.
-8. **Conformance**: run `cosiechat check your-vectors.json` on vectors *you*
+8. **Conformance**: run `cosechat check your-vectors.json` on vectors *you*
    generate in the same format, and run `interop/live.py` against your echo
    bot (it must pass 6/6).
 

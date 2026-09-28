@@ -1,5 +1,5 @@
 """
-Suggested storage for a cosiechat application: key files, encryption at
+Suggested storage for a cosechat application: key files, encryption at
 rest, a ratchet rotation/retention policy, and a store-and-forward store.
 
 The library deliberately does none of this. Where keys live, how they are
@@ -28,15 +28,15 @@ import os
 import time
 from pathlib import Path
 
-from cosiechat import Identity, cbor, cose
-from cosiechat.keys import A256GCM, Key
-from cosiechat.ratchet import new_ratchet
+from cosechat import Identity, cbor, cose
+from cosechat.keys import A256GCM, Key
+from cosechat.ratchet import new_ratchet
 
-HOME = Path(os.environ.get('COSIECHAT_HOME', Path.home() / '.cosiechat'))
+HOME = Path(os.environ.get('COSECHAT_HOME', Path.home() / '.cosechat'))
 ROTATE_EVERY = 30 * 60
 KEEP_FOR = 10 * 86400
 
-_LOCKED = 'cosiechat-locked-v1'
+_LOCKED = 'cosechat-locked-v1'
 _SCRYPT = {'n': 2**15, 'r': 8, 'p': 1, 'maxmem': 64 * 1024 * 1024, 'dklen': 32}
 
 
@@ -174,7 +174,7 @@ async def announce_forever(node, interval: float, ratchets: FileRatchets | None 
 
 class FileStore:
   """
-  Store-and-forward held in files, for propagation nodes (see cosiechat.store).
+  Store-and-forward held in files, for propagation nodes (see cosechat.store).
   One directory per destination, one file per held packet; only ciphertext
   is ever written. Policy: at most `per_dest` held per destination, and
   anything older than `keep_for` (by this device's clock) is deleted by

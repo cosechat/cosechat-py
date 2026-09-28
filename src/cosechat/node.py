@@ -66,7 +66,7 @@ from .ratchet import MemoryRatchets, Ratchets
 from .roads import Road
 from .store import MemoryStore, Store
 
-log = logging.getLogger('cosiechat.node')
+log = logging.getLogger('cosechat.node')
 
 # bounds on in-memory state (local policy, not protocol)
 SEEN_CACHE = 50000  # packet hashes remembered for duplicate filtering

@@ -4,9 +4,9 @@ import asyncio
 
 from test_node import inbox, make, run, until
 
-from cosiechat.node import Node
-from cosiechat.packet import KEYSET, KEYSET_REQUEST, Packet, decode
-from cosiechat.roads.memory import MemoryHub
+from cosechat.node import Node
+from cosechat.packet import KEYSET, KEYSET_REQUEST, Packet, decode
+from cosechat.roads.memory import MemoryHub
 
 
 def spy(node):

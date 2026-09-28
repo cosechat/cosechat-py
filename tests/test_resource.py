@@ -7,10 +7,10 @@ import pytest
 from test_delivery import pair
 from test_node import run
 
-from cosiechat import link as L
-from cosiechat import resource as R
-from cosiechat.keys import CoseError
-from cosiechat.packet import LINK_DATA, Packet
+from cosechat import link as L
+from cosechat import resource as R
+from cosechat.keys import CoseError
+from cosechat.packet import LINK_DATA, Packet
 
 
 def test_split_and_assemble():
@@ -43,7 +43,7 @@ def test_oversize_and_malformed_advertisements_refused():
 
 def test_a_part_fits_one_lora_frame():
   a_to_b = L.LinkKeys(b'\x00' * 16, b'\x01' * 16, True, *[None] * 2)
-  from cosiechat.keys import CHACHA20_POLY1305, Key
+  from cosechat.keys import CHACHA20_POLY1305, Key
 
   a_to_b.send_key = Key(CHACHA20_POLY1305, priv=b'\x00' * 32, kid=b'\x00' * 16)
   part = R.encode(R.R_PART, [b'\x00' * 16, 9999, b'\x00' * R.PART_SIZE])
@@ -53,7 +53,7 @@ def test_a_part_fits_one_lora_frame():
 
 def test_send_a_resource_over_a_link():
   async def main():
-    hub = __import__('cosiechat.roads.memory', fromlist=['MemoryHub']).MemoryHub()
+    hub = __import__('cosechat.roads.memory', fromlist=['MemoryHub']).MemoryHub()
     a, b = await pair(hub, retry_after=0.2)
     got = []
     b.on_resource(got.append)
@@ -69,7 +69,7 @@ def test_send_a_resource_over_a_link():
 
 def test_resource_over_a_lossy_lora_road():
   async def main():
-    from cosiechat.roads.memory import MemoryHub
+    from cosechat.roads.memory import MemoryHub
 
     random.seed(5)
     hub = MemoryHub()
@@ -89,7 +89,7 @@ def test_resource_over_a_lossy_lora_road():
 
 def test_receiver_refuses_what_is_too_big():
   async def main():
-    from cosiechat.roads.memory import MemoryHub
+    from cosechat.roads.memory import MemoryHub
 
     hub = MemoryHub()
     a, b = await pair(hub, retry_after=0.1, max_resource=10_000)
@@ -102,7 +102,7 @@ def test_receiver_refuses_what_is_too_big():
 
 def test_lost_done_is_answered_again():
   async def main():
-    from cosiechat.roads.memory import MemoryHub
+    from cosechat.roads.memory import MemoryHub
 
     hub = MemoryHub()
     a, b = await pair(hub, retry_after=0.2)

@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
-from cosiechat import Identity, Node  # noqa: E402
+from cosechat import Identity, Node  # noqa: E402
 
 
 def hostport(s):
@@ -124,10 +124,10 @@ async def main() -> int:
 
   def road():
     if a.ws:
-      from cosiechat.roads.websocket import WebSocketClientRoad
+      from cosechat.roads.websocket import WebSocketClientRoad
 
       return WebSocketClientRoad(a.ws)
-    from cosiechat.roads.udp import UDPRoad
+    from cosechat.roads.udp import UDPRoad
 
     return UDPRoad(a.udp or ('0.0.0.0', 4242), a.udp_peer)
 

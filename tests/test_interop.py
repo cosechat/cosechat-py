@@ -13,8 +13,8 @@ from pycose.keys import EC2Key, OKPKey, SymmetricKey
 from pycose.messages import CoseMessage, Enc0Message, Mac0Message, Sign1Message, SignMessage
 from pycose.messages.signer import CoseSignature
 
-from cosiechat import cose
-from cosiechat import keys as K
+from cosechat import cose
+from cosechat import keys as K
 
 
 def _pycose_okp(k, private=True):

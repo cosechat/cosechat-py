@@ -11,8 +11,8 @@ At the prompt:
   @<address prefix> <text>   send a message (a full address, hex or address
                              text, also finds unknown peers)
   <text>                     reply to whoever wrote last
-  /card                      print your contact card (a cosiechat: URI)
-  /add <cosiechat:...>       add someone's contact card
+  /card                      print your contact card (a cosechat: URI)
+  /add <cosechat:...>       add someone's contact card
   /peers  /announce  /rotate  /quit
 """
 
@@ -26,7 +26,7 @@ from pathlib import Path
 
 import storage
 
-from cosiechat import SUITES, Node, RoadAuth, contact
+from cosechat import SUITES, Node, RoadAuth, contact
 
 
 def hostport(s: str, default_host: str) -> tuple[str, int]:
@@ -37,7 +37,7 @@ def hostport(s: str, default_host: str) -> tuple[str, int]:
 def build_node(a):
   passphrase = None
   if a.lock:
-    passphrase = os.environ.get('COSIECHAT_PASSPHRASE') or getpass.getpass('key passphrase: ')
+    passphrase = os.environ.get('COSECHAT_PASSPHRASE') or getpass.getpass('key passphrase: ')
   ident = storage.load_identity(a.identity, a.suite, passphrase)
   ratchets = storage.ratchets_for(a.identity, ident, passphrase)
   node = Node(
@@ -50,20 +50,20 @@ def build_node(a):
   )
   auth = RoadAuth.from_passphrase(a.road_key, a.road_key_mode) if a.road_key else None
   for spec in a.udp or []:
-    from cosiechat.roads.udp import UDPRoad
+    from cosechat.roads.udp import UDPRoad
 
     peers = [hostport(p, '127.0.0.1') for p in a.udp_peer] if a.udp_peer else None
     node.add_road(UDPRoad(hostport(spec, '0.0.0.0'), peers), auth)
   for spec in a.ws_server or []:
-    from cosiechat.roads.websocket import WebSocketServerRoad
+    from cosechat.roads.websocket import WebSocketServerRoad
 
     node.add_road(WebSocketServerRoad(*hostport(spec, '0.0.0.0')), auth)
   for url in a.ws or []:
-    from cosiechat.roads.websocket import WebSocketClientRoad
+    from cosechat.roads.websocket import WebSocketClientRoad
 
     node.add_road(WebSocketClientRoad(url), auth)
   for port in a.rnode or []:
-    from cosiechat.roads.rnode import RNodeRoad
+    from cosechat.roads.rnode import RNodeRoad
 
     if not a.freq:
       raise SystemExit('--rnode needs --freq')

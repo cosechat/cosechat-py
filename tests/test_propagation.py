@@ -4,8 +4,8 @@ import asyncio
 
 from test_node import inbox, make, run, until
 
-from cosiechat.node import Node
-from cosiechat.roads.memory import MemoryHub
+from cosechat.node import Node
+from cosechat.roads.memory import MemoryHub
 
 
 async def mesh(**kw):

@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from cosiechat import Identity
-from cosiechat.keys import HPKE_9
+from cosechat import Identity
+from cosechat.keys import HPKE_9
 
 EXAMPLES = Path(__file__).resolve().parents[1] / 'examples'
 sys.path.insert(0, str(EXAMPLES))
@@ -102,8 +102,8 @@ def test_chat_example_starts():
 def test_file_store_survives_a_propagation_node_restart(tmp_path):
   from test_node import inbox, make, run, until
 
-  from cosiechat.node import Node
-  from cosiechat.roads.memory import MemoryHub
+  from cosechat.node import Node
+  from cosechat.roads.memory import MemoryHub
 
   async def main():
     hub = MemoryHub()

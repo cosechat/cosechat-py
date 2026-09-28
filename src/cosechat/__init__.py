@@ -1,5 +1,5 @@
 """
-cosiechat: post-quantum mesh messaging over COSE/CBOR (Python reference).
+cosechat: post-quantum mesh messaging over COSE/CBOR (Python reference).
 
 The public API is what this module exports, plus the modules named below:
 
@@ -12,11 +12,11 @@ The public API is what this module exports, plus the modules named below:
   RoadAuth             per-road key (Mac0 / Encrypt0 per frame)
   Key, CoseError       COSE keys; the error for anything cryptographically wrong
 
-  cosiechat.message    seal / unseal / announces without a node
-  cosiechat.cose       COSE Sign1, Sign, Mac0, Mac, Encrypt0, Encrypt
-  cosiechat.link       link handshake and link messages without a node
-  cosiechat.contact    address text and contact cards
-  cosiechat.roads.*    memory, udp, websocket, rnode, shared
+  cosechat.message    seal / unseal / announces without a node
+  cosechat.cose       COSE Sign1, Sign, Mac0, Mac, Encrypt0, Encrypt
+  cosechat.link       link handshake and link messages without a node
+  cosechat.contact    address text and contact cards
+  cosechat.roads.*    memory, udp, websocket, rnode, shared
 
 Everything else (names starting with `_`, and module internals not listed)
 may change without notice.
@@ -35,7 +35,7 @@ from .resource import Resource
 from .store import MemoryStore, Store
 
 try:
-  __version__ = version('cosiechat')
+  __version__ = version('cosechat')
 except PackageNotFoundError:  # pragma: no cover
   __version__ = '0+unknown'
 

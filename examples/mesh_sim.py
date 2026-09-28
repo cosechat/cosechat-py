@@ -10,8 +10,8 @@ carry, and pre-quantum peers being shut out by default.
 
 import asyncio
 
-from cosiechat import Identity, Node
-from cosiechat.roads.memory import MemoryHub
+from cosechat import Identity, Node
+from cosechat.roads.memory import MemoryHub
 
 
 async def main():

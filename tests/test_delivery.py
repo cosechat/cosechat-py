@@ -6,10 +6,10 @@ import random
 import pytest
 from test_node import inbox, make, run, until
 
-from cosiechat import message as M
-from cosiechat.node import Node
-from cosiechat.packet import RECEIPT, Packet, decode
-from cosiechat.roads.memory import MemoryHub
+from cosechat import message as M
+from cosechat.node import Node
+from cosechat.packet import RECEIPT, Packet, decode
+from cosechat.roads.memory import MemoryHub
 
 
 async def pair(hub, **kw):

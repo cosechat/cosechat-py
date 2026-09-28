@@ -4,13 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from cosiechat import cbor, cose
-from cosiechat import keys as K
-from cosiechat import message as M
-from cosiechat import packet as P
-from cosiechat.identity import SUITES, Identity, address_of, signer_of
-from cosiechat.keys import CoseError, Key
-from cosiechat.ratchet import new_ratchet
+from cosechat import cbor, cose
+from cosechat import keys as K
+from cosechat import message as M
+from cosechat import packet as P
+from cosechat.identity import SUITES, Identity, address_of, signer_of
+from cosechat.keys import CoseError, Key
+from cosechat.ratchet import new_ratchet
 
 SIGN_ALGS = [K.ED25519, K.EDDSA, K.ESP256, K.ES256, K.ML_DSA_44, K.ML_DSA_65, K.ML_DSA_87]
 HPKE_ALGS = [

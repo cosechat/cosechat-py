@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from cosiechat.vectors import check, generate
+from cosechat.vectors import check, generate
 
 VECTORS = Path(__file__).parent / 'vectors' / 'vectors.json'
 
@@ -30,7 +30,7 @@ def _case(v, name):
 
 def test_reject_vectors_fail_only_because_of_their_rule():
   """Relax just the rule a case tests and it must be accepted: the case is not broken otherwise."""
-  from cosiechat.vectors import _accepted
+  from cosechat.vectors import _accepted
 
   v = json.loads(VECTORS.read_text())
   assert len(v['reject']) >= 20
@@ -48,26 +48,26 @@ def test_reject_vectors_fail_only_because_of_their_rule():
 
 
 def test_spec_size_table_matches_the_code():
-  from cosiechat.sizes import table
+  from cosechat.sizes import table
 
   spec = (Path(__file__).parents[1] / 'SPEC.md').read_text()
   inside = spec.split('<!-- sizes -->\n')[1].split('\n<!-- /sizes -->')[0]
-  assert inside == table(), 'SPEC.md sizes are stale: paste the output of `cosiechat sizes`'
+  assert inside == table(), 'SPEC.md sizes are stale: paste the output of `cosechat sizes`'
 
 
 def test_spec_constants_table_matches_the_code():
-  from cosiechat.constants import table
+  from cosechat.constants import table
 
   spec = (Path(__file__).parents[1] / 'SPEC.md').read_text()
   inside = spec.split('<!-- constants -->\n')[1].split('\n<!-- /constants -->')[0]
-  assert inside == table(), 'SPEC.md §16 is stale: paste the output of `cosiechat constants`'
+  assert inside == table(), 'SPEC.md §16 is stale: paste the output of `cosechat constants`'
 
 
 def test_every_numeric_node_setting_is_documented():
   import inspect
 
-  from cosiechat.constants import NODE_NOTES
-  from cosiechat.node import Node
+  from cosechat.constants import NODE_NOTES
+  from cosechat.node import Node
 
   for name, p in inspect.signature(Node.__init__).parameters.items():
     if isinstance(p.default, (bool, int, float)) or name == 'announce_interval':

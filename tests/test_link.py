@@ -7,14 +7,14 @@ import pytest
 from test_delivery import pair
 from test_node import inbox, make, run, until
 
-from cosiechat import cose
-from cosiechat import link as L
-from cosiechat.identity import Identity
-from cosiechat.keys import HPKE_0, CoseError
-from cosiechat.node import Node
-from cosiechat.packet import LINK_ACCEPT, LINK_DATA, decode
-from cosiechat.ratchet import MemoryRatchets
-from cosiechat.roads.memory import MemoryHub
+from cosechat import cose
+from cosechat import link as L
+from cosechat.identity import Identity
+from cosechat.keys import HPKE_0, CoseError
+from cosechat.node import Node
+from cosechat.packet import LINK_ACCEPT, LINK_DATA, decode
+from cosechat.ratchet import MemoryRatchets
+from cosechat.roads.memory import MemoryHub
 
 
 def handshake():

@@ -14,7 +14,7 @@ each message is a symmetric COSE_Encrypt0 with ~40 bytes of overhead.
     external_aad = SHA-256(request)
 
   link id           = SHA-256(request)[0:16]
-  keys              = HKDF-SHA-256(ikm = part_a || part_b, salt = link id, info = "cosiechat link", 64 bytes)
+  keys              = HKDF-SHA-256(ikm = part_a || part_b, salt = link id, info = "cosechat link", 64 bytes)
   A->B key, B->A key = keys[0:32], keys[32:64]   (ChaCha20/Poly1305)
 
   link message:
@@ -79,7 +79,7 @@ class PendingLink:
 
 
 def _derive(link_id: bytes, part_a: bytes, part_b: bytes, peer: bytes, initiator: bool) -> LinkKeys:
-  okm = HKDF(hashes.SHA256(), 64, link_id, b'cosiechat link').derive(part_a + part_b)
+  okm = HKDF(hashes.SHA256(), 64, link_id, b'cosechat link').derive(part_a + part_b)
   a_to_b = Key(CHACHA20_POLY1305, priv=okm[:32], kid=link_id)
   b_to_a = Key(CHACHA20_POLY1305, priv=okm[32:], kid=link_id)
   if initiator:

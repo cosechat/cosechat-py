@@ -133,7 +133,7 @@ class RNodeRoad(Road):
       try:
         import serial
       except ImportError as e:  # pragma: no cover
-        raise ImportError('RNode road needs: pip install cosiechat[rnode]') from e
+        raise ImportError('RNode road needs: pip install cosechat[rnode]') from e
       self.serial = serial.Serial(self.port, self.baudrate, timeout=0.1, write_timeout=None)
     else:
       self.serial = self.port

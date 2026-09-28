@@ -1,6 +1,6 @@
 """
 Every number an implementation needs, read from the code (SPEC.md §16
-embeds the output of `cosiechat constants`; a test keeps them in step).
+embeds the output of `cosechat constants`; a test keeps them in step).
 
 "protocol" values are part of the wire format: implementations MUST use them.
 "node defaults" and "limits" are local policy: implementations MAY choose

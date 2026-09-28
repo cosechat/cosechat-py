@@ -17,9 +17,9 @@ from pathlib import Path
 
 import storage
 
-from cosiechat import Node, RoadAuth
-from cosiechat.roads.rnode import RNodeRoad
-from cosiechat.roads.udp import UDPRoad
+from cosechat import Node, RoadAuth
+from cosechat.roads.rnode import RNodeRoad
+from cosechat.roads.udp import UDPRoad
 
 
 async def main():

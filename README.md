@@ -1,4 +1,4 @@
-# cosiechat (Python reference)
+# cosechat (Python reference)
 
 Post-quantum mesh messaging in the spirit of
 [Reticulum](https://github.com/markqvist/Reticulum) and
@@ -8,7 +8,7 @@ X-Wing (ML-KEM-768 + X25519), and ML-DSA signatures.
 
 This is the reference implementation and test oracle for the JS and Arduino
 ([wolfCOSE](https://www.wolfssl.com/products/wolfcose/)/wolfSSL) ports.
-The wire format is in [SPEC.md](SPEC.md) (and as CDDL in [cosiechat.cddl](cosiechat.cddl)), how to
+The wire format is in [SPEC.md](SPEC.md) (and as CDDL in [cosechat.cddl](cosechat.cddl)), how to
 build another implementation is in [PORTING.md](PORTING.md), known limits are in [CAVEATS.md](CAVEATS.md),
 and runnable examples (including a UDP echo bot) are in [examples/](examples/).
 
@@ -26,7 +26,7 @@ and runnable examples (including a UDP echo bot) are in [examples/](examples/).
   ratchets, but required).
 * **Small announces, sent rarely.** The keyset goes only in first-contact
   announces and path-request answers; paths last a week, like Reticulum.
-  Sizes: SPEC §14, or `cosiechat sizes`.
+  Sizes: SPEC §14, or `cosechat sizes`.
 * **Storage is yours.** The library does no file I/O and trusts no dates: how
   keys are stored, encrypted at rest, rotated and deleted is the application's
   call. [examples/storage.py](examples/storage.py) shows a suggested practice.
@@ -40,19 +40,19 @@ and runnable examples (including a UDP echo bot) are in [examples/](examples/).
 ## Layout
 
 ```
-src/cosiechat/
+src/cosechat/
   keys.py       COSE algorithms + COSE_Key (all crypto from pyca/cryptography)
   cose.py       Sign1, Sign, Mac0, Mac, Encrypt0, Encrypt (RFC 9052 structures)
   identity.py   keyset -> address, suites (pq / hybrid / prequantum)
   message.py    seal / unseal, announces
-  contact.py    address text with a checksum, contact cards (cosiechat: URIs)
+  contact.py    address text with a checksum, contact cards (cosechat: URIs)
   ratchet.py    ratchet keys (forward secrecy): mechanism only, no clocks
   link.py       sessions: PQ handshake, then symmetric messages
   packet.py     packets, fragmentation, road auth (Mac0 / Encrypt0 per frame)
   node.py       routing: announces, paths, via-forwarding, path requests, store & forward
   roads/        memory, udp, websocket, rnode (+ kiss), shared (several nodes, one road)
   vectors.py    interop test vectors: generate + check
-  cli.py        cosiechat dev tool: keygen, info, vectors, check
+  cli.py        cosechat dev tool: keygen, info, vectors, check
 interop/wolfcose/   C checker: runs the vectors through stock wolfCOSE
 examples/           storage policy, chat, echo bot + client, mesh simulation, LoRa gateway
 ```
@@ -66,10 +66,10 @@ in the library stores keys or expires them by time.
 ```sh
 uv sync --all-extras
 uv run pytest                      # no hardware needed
-uv run cosiechat keygen -o me.key  # dev tool: new identity (plain keyset)
-uv run cosiechat info me.key
-uv run cosiechat sizes             # measured wire sizes
-uv run cosiechat constants         # every constant and default
+uv run cosechat keygen -o me.key  # dev tool: new identity (plain keyset)
+uv run cosechat info me.key
+uv run cosechat sizes             # measured wire sizes
+uv run cosechat constants         # every constant and default
 uv run examples/chat.py --name alice --udp 4242
 uv run examples/chat.py --lock --udp 4242           # passphrase-encrypt keys at rest
 uv run examples/chat.py --ws-server 4243 --transport  # a hub for browsers
@@ -81,8 +81,8 @@ In the chat, `@<address prefix> text` sends, a bare line replies, and
 
 ```python
 import asyncio
-from cosiechat import Identity, Node
-from cosiechat.roads.udp import UDPRoad
+from cosechat import Identity, Node
+from cosechat.roads.udp import UDPRoad
 
 async def main():
   node = Node(Identity.generate('pq'), app_data={'name': 'alice'})
@@ -98,8 +98,8 @@ asyncio.run(main())
 The data library works on its own:
 
 ```python
-from cosiechat import Identity, message
-from cosiechat.ratchet import MemoryRatchets
+from cosechat import Identity, message
+from cosechat.ratchet import MemoryRatchets
 
 alice, bob = Identity.generate(), Identity.generate()
 bobs_ratchets = MemoryRatchets(bob.kem_alg)            # bob announces .current()
@@ -113,8 +113,8 @@ got = message.unseal(bob, sealed, {alice.address: alice.public()}.get, ratchets=
 ## Testing other implementations
 
 ```sh
-uv run cosiechat vectors -o vectors.json   # what other implementations must accept
-uv run cosiechat check their-vectors.json  # check what they produce
+uv run cosechat vectors -o vectors.json   # what other implementations must accept
+uv run cosechat check their-vectors.json  # check what they produce
 uv run interop/live.py <bot address> --udp HOST:PORT --udp-peer HOST:PORT   # live checks vs an echo bot
 cd interop/wolfcose && make test WOLFSSL_PREFIX=... WOLFCOSE_DIR=...
 ```

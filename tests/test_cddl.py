@@ -1,4 +1,4 @@
-"""cosiechat.cddl describes what actually goes on the wire (validated with pycddl)."""
+"""cosechat.cddl describes what actually goes on the wire (validated with pycddl)."""
 
 import json
 from pathlib import Path
@@ -8,16 +8,16 @@ import pytest
 from test_delivery import pair
 from test_node import run
 
-from cosiechat import cbor, cose
-from cosiechat import link as L
-from cosiechat import message as M
-from cosiechat import packet as P
-from cosiechat.identity import SUITES, Identity
-from cosiechat.ratchet import new_ratchet
-from cosiechat.roads.memory import MemoryHub
+from cosechat import cbor, cose
+from cosechat import link as L
+from cosechat import message as M
+from cosechat import packet as P
+from cosechat.identity import SUITES, Identity
+from cosechat.ratchet import new_ratchet
+from cosechat.roads.memory import MemoryHub
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC_SOURCE = (ROOT / 'cosiechat.cddl').read_text()
+SPEC_SOURCE = (ROOT / 'cosechat.cddl').read_text()
 # pycddl 0.6 (cddl-rs) applies a `.cbor` control inside an array to every
 # later item too, so it cannot check COSE's protected header in place. We
 # loosen that one rule for the tool and check protected headers ourselves
@@ -106,7 +106,7 @@ def test_message_and_link_bodies():
   valid('link-body', body)
   valid('link-body', L.message_body(close=True))
   valid('link-data-payload', bstr(L.seal(kb, body)))
-  from cosiechat import resource as R
+  from cosechat import resource as R
 
   out = R.Outgoing.of(a.address, b'z' * 1000, {'name': 'f'})
   valid('resource-body', R.encode(R.R_ADVERTISE, out.advertisement()))
@@ -194,4 +194,4 @@ def test_vector_packets():
 def test_spec_embeds_the_current_cddl():
   spec = (ROOT / 'SPEC.md').read_text()
   inside = spec.split('<!-- cddl -->\n```cddl\n')[1].split('\n```\n<!-- /cddl -->')[0]
-  assert inside == SPEC_SOURCE.rstrip('\n'), 'SPEC.md §15 is stale: paste cosiechat.cddl'
+  assert inside == SPEC_SOURCE.rstrip('\n'), 'SPEC.md §15 is stale: paste cosechat.cddl'

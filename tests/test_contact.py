@@ -3,10 +3,10 @@
 import pytest
 from test_node import inbox, make, run
 
-from cosiechat import contact as C
-from cosiechat.identity import Identity
-from cosiechat.keys import CoseError
-from cosiechat.roads.memory import MemoryHub
+from cosechat import contact as C
+from cosechat.identity import Identity
+from cosechat.keys import CoseError
+from cosechat.roads.memory import MemoryHub
 
 
 def test_address_text_roundtrip_and_checksum():
@@ -24,7 +24,7 @@ def test_address_text_roundtrip_and_checksum():
 def test_card_uri_roundtrip():
   card = b'\x00\x01\xfe\xff' * 50
   uri = C.card_uri(card)
-  assert uri.startswith('cosiechat:') and '=' not in uri
+  assert uri.startswith('cosechat:') and '=' not in uri
   assert C.card_from_uri(uri) == card
   with pytest.raises(CoseError):
     C.card_from_uri('https://example.com')

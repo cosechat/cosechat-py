@@ -1,6 +1,6 @@
-# cosiechat protocol, version 0 (draft)
+# cosechat protocol, version 0 (draft)
 
-cosiechat is a Reticulum/LXMF-style mesh messaging protocol rebuilt from
+cosechat is a Reticulum/LXMF-style mesh messaging protocol rebuilt from
 standard parts: **CBOR** (RFC 8949), **COSE** (RFC 9052/9053), **COSE-HPKE**
 (draft-ietf-cose-hpke), **ML-DSA** (FIPS 204, draft-ietf-cose-dilithium) and
 **X-Wing** (ML-KEM-768 + X25519, draft-connolly-cfrg-xwing-kem).
@@ -258,7 +258,7 @@ an application stores keys and opened messages is outside this protocol (see
 
 ### 6.1 Several recipients (extra)
 
-Reticulum/LXMF has no multi-recipient messages. cosiechat keeps two
+Reticulum/LXMF has no multi-recipient messages. cosechat keeps two
 optional forms, mainly as a demonstration of COSE:
 
 * **Copies (what the reference node does for `send([a, b])`):** sign once,
@@ -300,10 +300,10 @@ and never goes backwards; a device without a clock can use a persisted counter.
 **Sharing a contact.** An address lets a mesh find someone (a path request
 brings their announce), but messaging needs their keyset and ratchet. A
 **contact card** is simply a signed full announce, as a URI:
-`cosiechat:` + base64url(announce) (no padding). A receiver checks it like any
+`cosechat:` + base64url(announce) (no padding). A receiver checks it like any
 announce (pinning and the quantum-safe policy apply). For people, addresses
 are written as **address text**: base32 (RFC 4648, lowercase, no padding) of
-the 16 bytes, then 4 base32 characters of `SHA-256("cosiechat address" ||
+the 16 bytes, then 4 base32 characters of `SHA-256("cosechat address" ||
 address)` as a checksum, grouped by 5 with dashes; implementations SHOULD
 also accept plain hex. A `pq` card is ~6.6 KB, too big for one QR code;
 share the address text there and let the mesh fetch the rest.
@@ -433,7 +433,7 @@ A road MAY have a shared road key (like Reticulum's IFAC). Then every frame
 * mode `encrypt`: COSE_Encrypt0, A256GCM. Outsiders cannot even see addresses.
 
 Frames that fail are dropped silently. Keys from a passphrase:
-`HKDF-SHA256(ikm = utf8(passphrase), salt = "cosiechat road key", info = "mac" | "encrypt")`,
+`HKDF-SHA256(ikm = utf8(passphrase), salt = "cosechat road key", info = "mac" | "encrypt")`,
 32 bytes.
 
 ## 9. Routing (node behaviour)
@@ -524,7 +524,7 @@ secret** in the message body (field 6). A recipient that opened and verified
 the message MUST answer with a RECEIPT packet to the sender's address:
 
 ```
-receipt tag = HMAC-SHA-256(key = secret, "cosiechat receipt" || recipient address)[0:16]
+receipt tag = HMAC-SHA-256(key = secret, "cosechat receipt" || recipient address)[0:16]
 payload     = receipt tag || 8 random bytes   ; the nonce gives every receipt a new packet hash
 ```
 
@@ -564,7 +564,7 @@ accept   (LINK_ACCEPT, B -> A):
   link id || COSE_Encrypt0, HPKE to A's ephemeral key, of CBOR { 1: part_b (bstr .size 32, random) }
              external_aad = SHA-256(request)
 
-keys     = HKDF-SHA-256(ikm = part_a || part_b, salt = link id, info = "cosiechat link", L = 64)
+keys     = HKDF-SHA-256(ikm = part_a || part_b, salt = link id, info = "cosechat link", L = 64)
 A->B key = keys[0:32], B->A key = keys[32:64]      (ChaCha20/Poly1305, alg 24)
 
 message  (LINK_DATA, either way):
@@ -698,7 +698,7 @@ drives optional flow control. `LEAVE (0x0A) 0xFF` on shutdown.
 
 ## 11. Differences from Reticulum / LXMF
 
-| | Reticulum / LXMF | cosiechat |
+| | Reticulum / LXMF | cosechat |
 |---|---|---|
 | identity | X25519 + Ed25519, 64 raw bytes | COSE_KeySet of signing keys only, PQ by default |
 | address | SHA-256(name hash ‖ identity hash)[0:16] | SHA-256(keyset)[0:16] (no app names/aspects yet) |
@@ -720,7 +720,7 @@ aspects), path expiry policy.
 
 ## 13. Test vectors
 
-`tests/vectors/vectors.json` (regenerate with `cosiechat vectors`) holds:
+`tests/vectors/vectors.json` (regenerate with `cosechat vectors`) holds:
 keys and COSE objects for every algorithm; identities with their ratchets;
 sealed messages (to a ratchet, and a shared multi-recipient Encrypt) with
 receipt tags; full and short announces; link handshakes with their derived keys and messages;
@@ -745,7 +745,7 @@ link key derivation, and a road-auth frame. Keys are given as private bytes.
 
 Another implementation should (1) accept every vector in that file, refusing
 every `reject` case and reproducing every `exact` case, and (2) emit a file in
-the same format that `cosiechat check FILE` accepts.
+the same format that `cosechat check FILE` accepts.
 
 `interop/live.py` is the behavioural check: it drives an echo bot written in
 any implementation over UDP or WebSocket through path requests, sealed
@@ -780,18 +780,18 @@ the code disagree):
 | link message | 130 B | 130 B | 130 B |
 | resource part | 426 B | 426 B | 426 B |
 
-Whole packets without road auth; "frames" = RNode frames of 508 bytes after fragmentation. Messages carry the 19-character text "hello, how are you?" and a receipt secret. Generated by `cosiechat sizes`.
+Whole packets without road auth; "frames" = RNode frames of 508 bytes after fragmentation. Messages carry the 19-character text "hello, how are you?" and a receipt secret. Generated by `cosechat sizes`.
 <!-- /sizes -->
 
 ## 15. CDDL
 
-The whole wire format as CDDL (RFC 8610). This is `cosiechat.cddl`, which
+The whole wire format as CDDL (RFC 8610). This is `cosechat.cddl`, which
 `tests/test_cddl.py` validates against real encodings, including every frame
 of a live mesh (a test fails if this copy and the file differ).
 
 <!-- cddl -->
 ```cddl
-; cosiechat wire format, protocol version 0 (draft). CDDL: RFC 8610.
+; cosechat wire format, protocol version 0 (draft). CDDL: RFC 8610.
 ; Checked against real encodings by tests/test_cddl.py.
 ; Everything is deterministically encoded CBOR (RFC 8949 4.2.1).
 
@@ -946,7 +946,7 @@ COSE_Key = {
 
 Every number an implementation needs. **Protocol** values are wire format and
 MUST be used; **node defaults** and **limits** are local policy (what the
-reference does). Generated by `cosiechat constants` (a test fails if this
+reference does). Generated by `cosechat constants` (a test fails if this
 copy and the code differ).
 
 <!-- constants -->

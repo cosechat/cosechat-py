@@ -1,6 +1,6 @@
 # Caveats
 
-Known limits of cosiechat as it stands. The wire format is in
+Known limits of cosechat as it stands. The wire format is in
 [SPEC.md](SPEC.md). This file is the honest list of what it does not (yet) do.
 
 ## Security
@@ -36,7 +36,7 @@ Known limits of cosiechat as it stands. The wire format is in
   encryption key, so knowing an address or keyset is not enough: the
   announce carries the ratchet. First contact needs an announce (a path
   request triggers one), and sharing a contact out of band means sharing a
-  contact card (a signed announce, `cosiechat:` URI), not just an address. A
+  contact card (a signed announce, `cosechat:` URI), not just an address. A
   `pq` card is ~6.6 KB, too big for one QR code. A message sealed to a ratchet the
   recipient has since deleted can no longer be opened, which includes
   messages held too long by a store-and-forward node.
@@ -78,7 +78,7 @@ Known limits of cosiechat as it stands. The wire format is in
 * **Key storage is the application's job.** The library does no file I/O.
   `examples/storage.py` shows one practice: files written atomically with
   mode 0600, and optionally encrypted at rest with a passphrase (scrypt, then
-  COSE_Encrypt0). `cosiechat keygen` writes a plain, unencrypted keyset.
+  COSE_Encrypt0). `cosechat keygen` writes a plain, unencrypted keyset.
 
 ## Protocol gaps (vs Reticulum / LXMF)
 

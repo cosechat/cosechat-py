@@ -5,13 +5,13 @@ import time
 
 from test_node import make, run, until
 
-from cosiechat import message as M
-from cosiechat.identity import Identity
-from cosiechat.node import Node, _Lane
-from cosiechat.packet import ANNOUNCE, Packet, decode
-from cosiechat.ratchet import new_ratchet
-from cosiechat.roads.memory import MemoryHub
-from cosiechat.roads.rnode import RNodeRoad
+from cosechat import message as M
+from cosechat.identity import Identity
+from cosechat.node import Node, _Lane
+from cosechat.packet import ANNOUNCE, Packet, decode
+from cosechat.ratchet import new_ratchet
+from cosechat.roads.memory import MemoryHub
+from cosechat.roads.rnode import RNodeRoad
 
 
 def announce_packet(hops=0, ident=None, seq=None):

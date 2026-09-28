@@ -4,10 +4,10 @@ import asyncio
 
 import pytest
 
-from cosiechat.identity import Identity
-from cosiechat.node import Node
-from cosiechat.packet import RoadAuth
-from cosiechat.roads.memory import MemoryHub
+from cosechat.identity import Identity
+from cosechat.node import Node
+from cosechat.packet import RoadAuth
+from cosechat.roads.memory import MemoryHub
 
 SUITES = ['pq', 'prequantum', 'hybrid']
 

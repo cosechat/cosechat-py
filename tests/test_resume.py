@@ -6,9 +6,9 @@ import random
 from test_delivery import pair
 from test_node import inbox, run, until
 
-from cosiechat.node import _Lane
-from cosiechat.packet import FRAGMENT_NACK, Nack, Reassembler, decode, fragment, nack
-from cosiechat.roads.memory import MemoryHub
+from cosechat.node import _Lane
+from cosechat.packet import FRAGMENT_NACK, Nack, Reassembler, decode, fragment, nack
+from cosechat.roads.memory import MemoryHub
 
 
 def test_nack_frame_is_tiny_and_roundtrips():
@@ -46,7 +46,7 @@ def test_sender_resends_only_what_was_asked_for():
   async def main():
     road = Recorder()
     lane = _Lane(road, None, cap=0, max_age=60)
-    from cosiechat.packet import DATA, Packet
+    from cosechat.packet import DATA, Packet
 
     await lane.send(Packet(DATA, 0, b'\x01' * 16, None, b'y' * 2000))
     first = list(road.sent)

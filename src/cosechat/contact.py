@@ -10,7 +10,7 @@ A contact card: an address is enough to *find* someone on a mesh (a path
 request brings their announce), but to message them you need their keyset and
 ratchet, which their signed announce carries. A card is a full announce:
 
-  card_uri(announce) -> 'cosiechat:' + base64url(announce)
+  card_uri(announce) -> 'cosechat:' + base64url(announce)
 
 A pq card is ~6.6 KB (too big for one QR code: use a file, NFC, or share the
 address text and let the mesh do the rest); a prequantum card is ~280 bytes.
@@ -22,7 +22,7 @@ import hashlib
 from .identity import ADDRESS_SIZE
 from .keys import CoseError
 
-URI_PREFIX = 'cosiechat:'
+URI_PREFIX = 'cosechat:'
 CHECK_SIZE = 4  # base32 characters of checksum (20 bits)
 
 
@@ -31,7 +31,7 @@ def _b32(data: bytes) -> str:
 
 
 def _check(address: bytes) -> str:
-  return _b32(hashlib.sha256(b'cosiechat address' + address).digest())[:CHECK_SIZE]
+  return _b32(hashlib.sha256(b'cosechat address' + address).digest())[:CHECK_SIZE]
 
 
 def address_text(address: bytes) -> str:
@@ -68,7 +68,7 @@ def card_uri(announce: bytes) -> str:
 def card_from_uri(uri: str) -> bytes:
   u = uri.strip()
   if not u.startswith(URI_PREFIX):
-    raise CoseError('not a cosiechat contact card')
+    raise CoseError('not a cosechat contact card')
   b = u[len(URI_PREFIX) :]
   try:
     return base64.urlsafe_b64decode(b + '=' * (-len(b) % 4))

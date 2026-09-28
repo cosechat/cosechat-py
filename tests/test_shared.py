@@ -2,9 +2,9 @@
 
 from test_node import inbox, run, until
 
-from cosiechat.node import Node
-from cosiechat.roads.memory import MemoryHub
-from cosiechat.roads.shared import SharedRoad
+from cosechat.node import Node
+from cosechat.roads.memory import MemoryHub
+from cosechat.roads.shared import SharedRoad
 
 
 def test_two_identities_share_a_road():

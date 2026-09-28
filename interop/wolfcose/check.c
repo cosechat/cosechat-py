@@ -1,5 +1,5 @@
 /*
- * Verify cosiechat vectors with stock wolfCOSE + wolfCrypt (the Arduino stack).
+ * Verify cosechat vectors with stock wolfCOSE + wolfCrypt (the Arduino stack).
  * Reads cases from stdin (see make_cases.py), one per line:
  *   name op key[,key...] aad|- data expect
  */

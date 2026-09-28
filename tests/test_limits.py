@@ -5,13 +5,13 @@ import asyncio
 from test_flood import Recorder, announce_packet
 from test_node import make, run, until
 
-from cosiechat import link as L
-from cosiechat import message as M
-from cosiechat.identity import Identity
-from cosiechat.node import ANNOUNCE_QUEUE, _Lane
-from cosiechat.packet import ANNOUNCE, LINK_REQUEST, Packet
-from cosiechat.ratchet import new_ratchet
-from cosiechat.roads.memory import MemoryHub
+from cosechat import link as L
+from cosechat import message as M
+from cosechat.identity import Identity
+from cosechat.node import ANNOUNCE_QUEUE, _Lane
+from cosechat.packet import ANNOUNCE, LINK_REQUEST, Packet
+from cosechat.ratchet import new_ratchet
+from cosechat.roads.memory import MemoryHub
 
 
 def test_token_bucket():

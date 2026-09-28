@@ -18,7 +18,7 @@ try:
   from websockets.asyncio.server import serve
   from websockets.exceptions import ConnectionClosed
 except ImportError as e:  # pragma: no cover
-  raise ImportError('WebSocket roads need: pip install cosiechat[websocket]') from e
+  raise ImportError('WebSocket roads need: pip install cosechat[websocket]') from e
 
 WS_MTU = 1 << 20
 

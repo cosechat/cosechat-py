@@ -1,12 +1,12 @@
 """
-cosiechat developer tool.
+cosechat developer tool.
 
-  cosiechat keygen [--suite pq|hybrid|prequantum] -o FILE   new identity (plain COSE_KeySet)
-  cosiechat info FILE                                        describe an identity
-  cosiechat vectors [-o FILE]                                write interop test vectors
-  cosiechat check FILE                                       verify vectors from any implementation
-  cosiechat sizes                                            measured wire sizes (Markdown)
-  cosiechat constants                                        every constant and default (Markdown)
+  cosechat keygen [--suite pq|hybrid|prequantum] -o FILE   new identity (plain COSE_KeySet)
+  cosechat info FILE                                        describe an identity
+  cosechat vectors [-o FILE]                                write interop test vectors
+  cosechat check FILE                                       verify vectors from any implementation
+  cosechat sizes                                            measured wire sizes (Markdown)
+  cosechat constants                                        every constant and default (Markdown)
 
 Running a node, and how its keys are stored, is up to the application: see
 examples/chat.py and examples/storage.py.
@@ -76,7 +76,7 @@ def cmd_check(a):
 
 
 def main(argv=None):
-  p = argparse.ArgumentParser(prog='cosiechat', description='cosiechat developer tool')
+  p = argparse.ArgumentParser(prog='cosechat', description='cosechat developer tool')
   sub = p.add_subparsers(dest='cmd', required=True)
 
   s = sub.add_parser('keygen', help='create an identity file')
@@ -98,10 +98,10 @@ def main(argv=None):
   s.set_defaults(fn=cmd_check)
 
   s = sub.add_parser('constants', help='print every constant and default')
-  s.set_defaults(fn=lambda a: print(__import__('cosiechat.constants', fromlist=['table']).table()))
+  s.set_defaults(fn=lambda a: print(__import__('cosechat.constants', fromlist=['table']).table()))
 
   s = sub.add_parser('sizes', help='print measured wire sizes')
-  s.set_defaults(fn=lambda a: print(__import__('cosiechat.sizes', fromlist=['table']).table()))
+  s.set_defaults(fn=lambda a: print(__import__('cosechat.sizes', fromlist=['table']).table()))
 
   a = p.parse_args(argv)
   a.fn(a)

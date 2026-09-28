@@ -6,7 +6,7 @@ periodically so new peers find it.
   uv run examples/echo_bot.py --peer 10.0.0.5:4242   # unicast instead
   uv run examples/echo_client.py <bot address>       # test it
 
-Keys are kept with examples/storage.py in ~/.cosiechat/echo-bot (ratchets in
+Keys are kept with examples/storage.py in ~/.cosechat/echo-bot (ratchets in
 echo-bot.ratchets): its address stays the same across restarts, ratchets rotate
 every 30 minutes and are deleted after 10 days (the example storage policy).
 """
@@ -18,8 +18,8 @@ from pathlib import Path
 
 import storage
 
-from cosiechat import Node
-from cosiechat.roads.udp import UDPRoad
+from cosechat import Node
+from cosechat.roads.udp import UDPRoad
 
 
 def hostport(s: str) -> tuple[str, int]:

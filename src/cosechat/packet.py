@@ -240,9 +240,7 @@ class RoadAuth:
 
     alg = HMAC_256_256 if mode == 'mac' else A256GCM
     size = get_alg(alg).key_size
-    k = HKDF(hashes.SHA256(), size, b'cosiechat road key', mode.encode()).derive(
-      passphrase.encode()
-    )
+    k = HKDF(hashes.SHA256(), size, b'cosechat road key', mode.encode()).derive(passphrase.encode())
     return cls(Key(alg, priv=k), mode)
 
   def wrap(self, frame: bytes) -> bytes:

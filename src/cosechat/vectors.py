@@ -5,7 +5,7 @@ Signatures and HPKE are randomized, so the vectors are "must accept" cases:
 another implementation must verify, decrypt and parse each one and get the
 expected result. Keys are included in COSE_Key form (hex CBOR).
 
-  cosiechat vectors > vectors.json
+  cosechat vectors > vectors.json
 """
 
 import json
@@ -29,14 +29,14 @@ def _key(k: K.Key) -> str:
 
 def generate() -> dict:
   out = {
-    'description': 'cosiechat interop vectors: every entry must verify / decrypt to `expect`',
+    'description': 'cosechat interop vectors: every entry must verify / decrypt to `expect`',
     'cose': [],
     'identities': [],
     'messages': [],
     'announces': [],
     'packets': [],
   }
-  payload = b'cosiechat test payload'
+  payload = b'cosechat test payload'
   c = out['cose']
 
   for alg in [K.ED25519, K.ESP256, K.ML_DSA_44, K.ML_DSA_65, K.ML_DSA_87]:
@@ -259,10 +259,10 @@ def generate() -> dict:
   frame = P.Packet(P.PATH_REQUEST, 0, b'\x11' * 16, None, b'\x22' * 8).encode()
   out['road_auth'] = [
     {
-      'passphrase': 'cosiechat vectors',
+      'passphrase': 'cosechat vectors',
       'mode': mode,
-      'key': _key(P.RoadAuth.from_passphrase('cosiechat vectors', mode).key),
-      'data': _hex(P.RoadAuth.from_passphrase('cosiechat vectors', mode).wrap(frame)),
+      'key': _key(P.RoadAuth.from_passphrase('cosechat vectors', mode).key),
+      'data': _hex(P.RoadAuth.from_passphrase('cosechat vectors', mode).wrap(frame)),
       'expect': _hex(frame),
     }
     for mode in ('mac', 'encrypt')
@@ -305,24 +305,24 @@ def _exact() -> list[dict]:
   )
   case(
     'COSE_Sign1 Ed25519',
-    {'ed25519_private': _hex(seed(1)), 'payload': _hex(b'cosiechat'), 'kid': _hex(b'k')},
+    {'ed25519_private': _hex(seed(1)), 'payload': _hex(b'cosechat'), 'kid': _hex(b'k')},
     {
       'data': _hex(
-        cose.sign1(b'cosiechat', K.Key(ED25519, sk.pub, sk.priv, b'k'), kid_protected=True)
+        cose.sign1(b'cosechat', K.Key(ED25519, sk.pub, sk.priv, b'k'), kid_protected=True)
       )
     },
   )
   mk = K.Key(HMAC_256_256, priv=seed(80))
   case(
     'COSE_Mac0 HMAC 256/256',
-    {'key': _hex(seed(80)), 'payload': _hex(b'cosiechat')},
-    {'data': _hex(cose.mac0(b'cosiechat', mk))},
+    {'key': _hex(seed(80)), 'payload': _hex(b'cosechat')},
+    {'data': _hex(cose.mac0(b'cosechat', mk))},
   )
   ek = K.Key(A256GCM, priv=seed(120))
   case(
     'COSE_Encrypt0 A256GCM',
-    {'key': _hex(seed(120)), 'iv': _hex(seed(160, 12)), 'plaintext': _hex(b'cosiechat')},
-    {'data': _hex(cose.encrypt0(b'cosiechat', ek, iv=seed(160, 12)))},
+    {'key': _hex(seed(120)), 'iv': _hex(seed(160, 12)), 'plaintext': _hex(b'cosechat')},
+    {'data': _hex(cose.encrypt0(b'cosechat', ek, iv=seed(160, 12)))},
   )
   for full in (True, False):
     ann = M.make_announce(alice, rk, {'name': 'alice'}, sequence=1700000000000, full=full)
@@ -382,11 +382,11 @@ def _exact() -> list[dict]:
     {'link_id': _hex(seed(20, 16)), 'part_a': _hex(seed(30)), 'part_b': _hex(seed(60))},
     {'a_to_b': _hex(keys.send_key.priv), 'b_to_a': _hex(keys.recv_key.priv)},
   )
-  road = P.RoadAuth.from_passphrase('cosiechat vectors', 'mac')
+  road = P.RoadAuth.from_passphrase('cosechat vectors', 'mac')
   frame = P.Packet(P.PATH_REQUEST, 0, seed(3, 16), None, seed(4, 8)).encode()
   case(
     'road auth (mac)',
-    {'passphrase': 'cosiechat vectors', 'frame': _hex(frame)},
+    {'passphrase': 'cosechat vectors', 'frame': _hex(frame)},
     {'key': _hex(road.key.priv), 'data': _hex(road.wrap(frame))},
   )
   return out

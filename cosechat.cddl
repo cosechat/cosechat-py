@@ -1,4 +1,4 @@
-; cosiechat wire format, protocol version 0 (draft). CDDL: RFC 8610.
+; cosechat wire format, protocol version 0 (draft). CDDL: RFC 8610.
 ; Checked against real encodings by tests/test_cddl.py.
 ; Everything is deterministically encoded CBOR (RFC 8949 4.2.1).
 

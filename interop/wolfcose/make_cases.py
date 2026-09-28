@@ -13,9 +13,9 @@ import json
 import sys
 from pathlib import Path
 
-from cosiechat import cbor, cose
-from cosiechat import keys as K
-from cosiechat.identity import Identity
+from cosechat import cbor, cose
+from cosechat import keys as K
+from cosechat.identity import Identity
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -70,7 +70,7 @@ def main():
     algs = {K.Key.from_cose(cbor.loads(bytes.fromhex(k))).alg for k in keys}
     if op in ('enc', 'mac'):
       algs = {K.get_alg(a).sibling for a in algs} | {alg}
-    # wolfCOSE's COSE_Mac has no HPKE recipients (cosiechat only uses Mac0)
+    # wolfCOSE's COSE_Mac has no HPKE recipients (cosechat only uses Mac0)
     if not algs <= WOLFCOSE_ALGS or op == 'mac':
       skipped.append(name)
       continue

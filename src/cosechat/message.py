@@ -113,7 +113,7 @@ def message_id(signed: bytes) -> bytes:
 
 def receipt_tag(secret: bytes, recipient: bytes) -> bytes:
   """What `recipient` sends back to show it opened the message carrying `secret`."""
-  return hmac.new(secret, b'cosiechat receipt' + recipient, 'sha256').digest()[:RECEIPT_TAG_SIZE]
+  return hmac.new(secret, b'cosechat receipt' + recipient, 'sha256').digest()[:RECEIPT_TAG_SIZE]
 
 
 def sign_message(

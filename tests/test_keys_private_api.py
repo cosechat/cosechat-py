@@ -8,8 +8,8 @@ adapt keys.py, and only then raise the version bound in pyproject.toml.
 
 from cryptography.hazmat.bindings._rust import openssl as rust
 
-from cosiechat import cose
-from cosiechat import keys as K
+from cosechat import cose
+from cosechat import keys as K
 
 
 def test_private_hpke_aad_helpers_exist():

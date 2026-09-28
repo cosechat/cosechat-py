@@ -3,14 +3,14 @@
 import pytest
 from test_node import inbox, make, run, until
 
-from cosiechat import cose
-from cosiechat import keys as K
-from cosiechat import message as M
-from cosiechat.identity import Identity
-from cosiechat.keys import CoseError
-from cosiechat.packet import ANNOUNCE, Packet
-from cosiechat.ratchet import MemoryRatchets, check_ratchet, new_ratchet, ratchet_id
-from cosiechat.roads.memory import MemoryHub
+from cosechat import cose
+from cosechat import keys as K
+from cosechat import message as M
+from cosechat.identity import Identity
+from cosechat.keys import CoseError
+from cosechat.packet import ANNOUNCE, Packet
+from cosechat.ratchet import MemoryRatchets, check_ratchet, new_ratchet, ratchet_id
+from cosechat.roads.memory import MemoryHub
 
 
 def store(alg=K.HPKE_9, **kw):

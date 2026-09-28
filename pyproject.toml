@@ -1,5 +1,5 @@
 [project]
-name = 'cosiechat'
+name = 'cosechat'
 version = '0.1.0'
 description = 'Post-quantum mesh messaging over COSE/CBOR, inspired by Reticulum/LXMF'
 readme = 'README.md'
@@ -16,7 +16,7 @@ rnode = ['pyserial>=3.5']
 all = ['websockets>=13', 'pyserial>=3.5']
 
 [project.scripts]
-cosiechat = 'cosiechat.cli:main'
+cosechat = 'cosechat.cli:main'
 
 [dependency-groups]
 dev = [

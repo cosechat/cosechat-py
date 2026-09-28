@@ -13,8 +13,8 @@ import time
 
 from echo_bot import hostport
 
-from cosiechat import Identity, Node
-from cosiechat.roads.udp import UDPRoad
+from cosechat import Identity, Node
+from cosechat.roads.udp import UDPRoad
 
 
 async def main() -> int:

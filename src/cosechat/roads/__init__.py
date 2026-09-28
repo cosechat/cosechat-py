@@ -7,7 +7,7 @@ reaches every peer on it, and received frames are handed to `on_frame`.
 import logging
 from collections.abc import Callable
 
-log = logging.getLogger('cosiechat.road')
+log = logging.getLogger('cosechat.road')
 
 
 class Road:
