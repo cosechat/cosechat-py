@@ -53,8 +53,13 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-async def discover(a, b, deadline: float = 180.0):
-  """Announce one side at a time until each side has the other."""
+async def discover(a, b, deadline: float = 300.0):
+  """Announce one side at a time until each side has the other.
+
+  This is inherently probabilistic: every announce is a burst of fragments, and
+  the other side has to be listening for all of it. It keeps trying, one side at
+  a time, until the deadline.
+  """
   end = time.monotonic() + deadline
   while not (a.known(b.address) and b.known(a.address)):
     if time.monotonic() > end:
